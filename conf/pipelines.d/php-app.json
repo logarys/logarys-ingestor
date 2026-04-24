@@ -1,0 +1,27 @@
+{
+  "id": "php-app",
+  "source": "php-app",
+  "enabled": true,
+  "parser": {
+    "type": "regex",
+    "pattern": "^(?<timestamp>\\S+\\s+\\S+)\\s+\\[(?<level>[A-Z]+)\\]\\s+(?<message>.*)$"
+  },
+  "mapping": {
+    "timestamp": "timestamp",
+    "level": "level",
+    "message": "message"
+  },
+  "defaults": {
+    "source": "php-app",
+    "host": "app-01",
+    "service": "booking-api",
+    "env": "prod"
+  },
+  "publish": {
+    "subject": "logs.php.normalized"
+  },
+  "security": {
+    "mode": "header",
+    "token": "my-secret-token"
+  }
+}

@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  nats:
+    image: nats:2.11-alpine
+    command:
+      - "-js"
+      - "-m"
+      - "8222"
+      - "-sd"
+      - "/data"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats-data:/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: logarys/ingestor
+    depends_on:
+      - nats
+    ports:
+      - "3000:3000"
+    environment:
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "3000"
+      CONF_FILE: "/conf/pipelines.json"
+      CONF_PIPELINES_DIR: "/conf/pipelines.d"
+      NATS_URL: "nats://nats:4222"
+      NATS_CLIENT_NAME: "logarys-ingestor"
+      NATS_TIMEOUT_MS: "5000"
+      JETSTREAM_PUBLISH_TIMEOUT_MS: "5000"
+      LOG_LEVEL: "log,error,warn,debug"
+    volumes:
+      - .:/app
+      - ./conf:/conf
+    command: ['sleep', 'infinity']
+
+volumes:
+  nats-data:

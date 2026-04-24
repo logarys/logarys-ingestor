@@ -1,0 +1,93 @@
+#!/bin/bash
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/source/colors.source"
+
+VERBOSE=false
+RELEASE_TYPE=""
+
+help() {
+  echo "Usage: $0 --version <patch|minor|major> [-v]"
+  echo ""
+  echo "Options:"
+  echo "  --version    Release type: patch, minor, major"
+  echo "  -v           Show command output"
+  echo "  -h, --help   Show help"
+}
+
+log() {
+  echo -e "${BLUE}==>${NC} $1"
+}
+
+success() {
+  echo -e "${GREEN}✔${NC} $1"
+}
+
+error() {
+  echo -e "${RED}✘ $1${NC}"
+}
+
+run() {
+  local cmd="$*"
+
+  log "$cmd"
+
+  if [ "$VERBOSE" = true ]; then
+    bash -c "$cmd || error "$cmd fail !"
+  else
+    bash -c "$cmd || error "$cmd fail !" >/dev/null 2>&1
+  fi
+
+  success "Done"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version)
+      RELEASE_TYPE="$2"
+      shift 2
+      ;;
+    -v|--verbose)
+      VERBOSE=true
+      shift
+      ;;
+    -h|--help)
+      help
+      exit 0
+      ;;
+    *)
+      error "Unknown option: $1"
+      help
+      exit 1
+      ;;
+  esac
+done
+
+if [[ "$RELEASE_TYPE" != "patch" && "$RELEASE_TYPE" != "minor" && "$RELEASE_TYPE" != "major" ]]; then
+  error "You must specify a release type: patch, minor or major"
+  help
+  exit 1
+fi
+
+log "Starting $RELEASE_TYPE release"
+
+run "npm version $RELEASE_TYPE"
+
+VERSION="$(node -p "require('./package.json').version")"
+
+log "Build docker image"
+run "VERSION=$VERSION docker compose build app"
+
+log "Push docker image to dockerhub"
+run "docker tag logarys/ingestor:$VERSION logarys/ingestor:latest"
+run "docker push logarys/ingestor:$VERSION"
+run "docker push logarys/ingestor:latest"
+
+success "New version: $VERSION"
+
+run "version=$VERSION docker compose build app"
+run "version=$VERSION docker compose push"
+
+success "Release $VERSION completed"

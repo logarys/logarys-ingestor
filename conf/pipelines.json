@@ -1,0 +1,17 @@
+{
+  "defaults": {
+    "enabled": true,
+    "parser": {
+      "type": "raw"
+    },
+    "defaults": {
+      "env": "prod"
+    },
+    "publish": {
+      "subject": "logs.normalized"
+    },
+    "security": {
+      "mode": "none"
+    }
+  }
+}
