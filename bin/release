@@ -81,7 +81,7 @@ log "Build docker image"
 run "VERSION=$VERSION docker compose build app"
 
 log "Push docker image to dockerhub"
-run "docker tag logarys/ingestor:$VERSION logarys/ingestor:latest"
+run "docker tag logarys/ingestor:latest logarys/ingestor:$VERSION"
 run "docker push logarys/ingestor:$VERSION"
 run "docker push logarys/ingestor:latest"
 
