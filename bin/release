@@ -73,7 +73,7 @@ fi
 
 log "Starting $RELEASE_TYPE release"
 
-run "npm version $RELEASE_TYPE"
+run "npm version $RELEASE_TYPE --no-git-tag-version"
 
 VERSION="$(node -p "require('./package.json').version")"
 
