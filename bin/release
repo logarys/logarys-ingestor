@@ -35,9 +35,9 @@ run() {
   log "$cmd"
 
   if [ "$VERBOSE" = true ]; then
-    bash -c "$cmd || error "$cmd fail !"
+    bash -c "$cmd || error '$cmd fail !'"
   else
-    bash -c "$cmd || error "$cmd fail !" >/dev/null 2>&1
+    bash -c "$cmd || error '$cmd fail !'" >/dev/null 2>&1
   fi
 
   success "Done"
@@ -89,5 +89,8 @@ success "New version: $VERSION"
 
 run "version=$VERSION docker compose build app"
 run "version=$VERSION docker compose push"
+
+git tag "$VERSION"
+git push --tags
 
 success "Release $VERSION completed"
