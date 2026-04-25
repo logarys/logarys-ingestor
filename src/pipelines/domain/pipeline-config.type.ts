@@ -1,5 +1,5 @@
-export type PipelineSecurityMode = 'none' | 'header' | 'query';
-export type ParserType = 'raw' | 'json' | 'regex';
+export type PipelineSecurityMode = "none" | "header" | "query";
+export type ParserType = "raw" | "json" | "regex";
 
 export interface PipelineConfig {
   id: string;
@@ -34,7 +34,7 @@ export interface PipelineConfig {
 }
 
 export interface GlobalPipelinesConfig {
-  defaults: Partial<Omit<PipelineConfig, 'id' | 'source'>> & {
-    defaults?: PipelineConfig['defaults'];
+  defaults: Partial<Omit<PipelineConfig, "id" | "source">> & {
+    defaults?: PipelineConfig["defaults"];
   };
 }

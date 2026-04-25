@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable } from "@nestjs/common";
 import {
   DefaultEnricher,
   DefaultNormalizer,
@@ -10,8 +10,8 @@ import {
   type LogParser,
   type ParsedLog,
   type RawLogInput,
-} from 'small-log-normalizer';
-import type { PipelineConfig } from '../../pipelines/domain/pipeline-config.type.js';
+} from "small-log-normalizer";
+import type { PipelineConfig } from "../../pipelines/domain/pipeline-config.type.js";
 
 @Injectable()
 export class EngineFactoryService {
@@ -33,11 +33,11 @@ export class EngineFactoryService {
 
   private createParser(pipeline: PipelineConfig): LogParser {
     switch (pipeline.parser.type) {
-      case 'json':
+      case "json":
         return new JsonParser();
-      case 'regex':
+      case "regex":
         return new RegexMappedParser(pipeline);
-      case 'raw':
+      case "raw":
       default:
         return new RawParser();
     }
@@ -49,9 +49,11 @@ class RegexMappedParser implements LogParser {
 
   public constructor(private readonly pipeline: PipelineConfig) {
     if (!pipeline.parser.pattern) {
-      throw new ParsingError(`Pipeline ${pipeline.id} is missing parser.pattern`);
+      throw new ParsingError(
+        `Pipeline ${pipeline.id} is missing parser.pattern`,
+      );
     }
-    this.regex = new RegExp(pipeline.parser.pattern, 'u');
+    this.regex = new RegExp(pipeline.parser.pattern, "u");
   }
 
   public canParse(input: RawLogInput): boolean {
@@ -61,20 +63,22 @@ class RegexMappedParser implements LogParser {
   public parse(input: RawLogInput): ParsedLog {
     const match = this.regex.exec(input.raw);
     if (!match || !match.groups) {
-      throw new ParsingError(`Pipeline ${this.pipeline.id} could not parse the raw log`);
+      throw new ParsingError(
+        `Pipeline ${this.pipeline.id} could not parse the raw log`,
+      );
     }
 
     const groups = match.groups;
     const mapping = this.pipeline.mapping ?? {};
 
     const knownGroupNames = new Set<string>([
-      mapping.timestamp ?? 'timestamp',
-      mapping.level ?? 'level',
-      mapping.message ?? 'message',
-      mapping.source ?? 'source',
-      mapping.host ?? 'host',
-      mapping.service ?? 'service',
-      mapping.env ?? 'env',
+      mapping.timestamp ?? "timestamp",
+      mapping.level ?? "level",
+      mapping.message ?? "message",
+      mapping.source ?? "source",
+      mapping.host ?? "host",
+      mapping.service ?? "service",
+      mapping.env ?? "env",
     ]);
 
     const extra: Record<string, unknown> = {};
@@ -85,13 +89,16 @@ class RegexMappedParser implements LogParser {
     }
 
     return {
-      timestamp: this.getMappedValue(groups, mapping.timestamp, 'timestamp'),
-      level: this.getMappedValue(groups, mapping.level, 'level'),
-      message: this.getMappedValue(groups, mapping.message, 'message'),
-      source: this.getMappedValue(groups, mapping.source, 'source') ?? input.source,
-      host: this.getMappedValue(groups, mapping.host, 'host') ?? input.host,
-      service: this.getMappedValue(groups, mapping.service, 'service') ?? input.service,
-      env: this.getMappedValue(groups, mapping.env, 'env') ?? input.env,
+      timestamp: this.getMappedValue(groups, mapping.timestamp, "timestamp"),
+      level: this.getMappedValue(groups, mapping.level, "level"),
+      message: this.getMappedValue(groups, mapping.message, "message"),
+      source:
+        this.getMappedValue(groups, mapping.source, "source") ?? input.source,
+      host: this.getMappedValue(groups, mapping.host, "host") ?? input.host,
+      service:
+        this.getMappedValue(groups, mapping.service, "service") ??
+        input.service,
+      env: this.getMappedValue(groups, mapping.env, "env") ?? input.env,
       extra: {
         ...(input.metadata ?? {}),
         ...extra,

@@ -1,5 +1,5 @@
-import { Global, Module } from '@nestjs/common';
-import { NatsJetstreamService } from './services/nats-jetstream.service.js';
+import { Global, Module } from "@nestjs/common";
+import { NatsJetstreamService } from "./services/nats-jetstream.service.js";
 
 @Global()
 @Module({

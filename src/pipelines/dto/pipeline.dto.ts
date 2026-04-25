@@ -1,10 +1,18 @@
-import { IsBoolean, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
-import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsIn,
+  IsNotEmpty,
+  IsObject,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from "class-validator";
+import { Type } from "class-transformer";
 
 class ParserDto {
   @IsString()
-  @IsIn(['raw', 'json', 'regex'])
-  type!: 'raw' | 'json' | 'regex';
+  @IsIn(["raw", "json", "regex"])
+  type!: "raw" | "json" | "regex";
 
   @IsOptional()
   @IsString()
@@ -36,8 +44,8 @@ class PublishDto {
 
 class SecurityDto {
   @IsString()
-  @IsIn(['none', 'header', 'query'])
-  mode!: 'none' | 'header' | 'query';
+  @IsIn(["none", "header", "query"])
+  mode!: "none" | "header" | "query";
 
   @IsOptional()
   @IsString()

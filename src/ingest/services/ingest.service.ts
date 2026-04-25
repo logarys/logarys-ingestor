@@ -1,12 +1,12 @@
-import { ConflictException, Injectable } from '@nestjs/common';
-import type { Request } from 'express';
-import type { NormalizedLog } from 'small-log-normalizer';
-import { NatsJetstreamService } from '../../broker/services/nats-jetstream.service.js';
-import type { PipelineConfig } from '../../pipelines/domain/pipeline-config.type.js';
-import { PipelineConfigService } from '../../pipelines/services/pipeline-config.service.js';
-import { IngestLogDto } from '../dto/ingest-log.dto.js';
-import { EngineFactoryService } from './engine-factory.service.js';
-import { PipelineTokenService } from './pipeline-token.service.js';
+import { ConflictException, Injectable } from "@nestjs/common";
+import type { Request } from "express";
+import type { NormalizedLog } from "small-log-normalizer";
+import { NatsJetstreamService } from "../../broker/services/nats-jetstream.service.js";
+import type { PipelineConfig } from "../../pipelines/domain/pipeline-config.type.js";
+import { PipelineConfigService } from "../../pipelines/services/pipeline-config.service.js";
+import { IngestLogDto } from "../dto/ingest-log.dto.js";
+import { EngineFactoryService } from "./engine-factory.service.js";
+import { PipelineTokenService } from "./pipeline-token.service.js";
 
 export interface IngestResult {
   accepted: true;
@@ -24,7 +24,11 @@ export class IngestService {
     private readonly natsJetstreamService: NatsJetstreamService,
   ) {}
 
-  public async ingest(source: string, dto: IngestLogDto, request: Request): Promise<IngestResult> {
+  public async ingest(
+    source: string,
+    dto: IngestLogDto,
+    request: Request,
+  ): Promise<IngestResult> {
     const pipeline = this.pipelineConfigService.getBySource(source);
 
     if (!pipeline.enabled) {
@@ -43,9 +47,9 @@ export class IngestService {
         normalizedLog,
       },
       {
-        'x-pipeline-id': pipeline.id,
-        'x-source': pipeline.source,
-        'x-log-level': normalizedLog.level,
+        "x-pipeline-id": pipeline.id,
+        "x-source": pipeline.source,
+        "x-log-level": normalizedLog.level,
       },
     );
 
@@ -57,7 +61,10 @@ export class IngestService {
     };
   }
 
-  private normalizeLog(pipeline: PipelineConfig, dto: IngestLogDto): NormalizedLog {
+  private normalizeLog(
+    pipeline: PipelineConfig,
+    dto: IngestLogDto,
+  ): NormalizedLog {
     const engine = this.engineFactoryService.create(pipeline);
 
     return engine.normalize({

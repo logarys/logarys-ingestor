@@ -65,17 +65,17 @@ The test suite builds the application and runs functional HTTP tests with a mock
 
 ## Environment variables
 
-| Variable | Default | Description |
-|---|---:|---|
-| `APP_HOST` | `0.0.0.0` | HTTP bind host |
-| `APP_PORT` | `3000` | HTTP bind port |
-| `CONF_FILE` | `/conf/pipelines.json` | Global pipeline config file |
-| `CONF_PIPELINES_DIR` | `/conf/pipelines.d` | Directory containing one JSON file per pipeline |
-| `NATS_URL` | `nats://localhost:4222` | NATS server URL |
-| `NATS_CLIENT_NAME` | `logarys-ingestor` | NATS client name |
-| `NATS_TIMEOUT_MS` | `5000` | NATS connection timeout |
-| `JETSTREAM_PUBLISH_TIMEOUT_MS` | `5000` | JetStream publish timeout |
-| `LOG_LEVEL` | `log,error,warn` | Nest logger levels |
+| Variable                       |                 Default | Description                                     |
+| ------------------------------ | ----------------------: | ----------------------------------------------- |
+| `APP_HOST`                     |               `0.0.0.0` | HTTP bind host                                  |
+| `APP_PORT`                     |                  `3000` | HTTP bind port                                  |
+| `CONF_FILE`                    |  `/conf/pipelines.json` | Global pipeline config file                     |
+| `CONF_PIPELINES_DIR`           |     `/conf/pipelines.d` | Directory containing one JSON file per pipeline |
+| `NATS_URL`                     | `nats://localhost:4222` | NATS server URL                                 |
+| `NATS_CLIENT_NAME`             |      `logarys-ingestor` | NATS client name                                |
+| `NATS_TIMEOUT_MS`              |                  `5000` | NATS connection timeout                         |
+| `JETSTREAM_PUBLISH_TIMEOUT_MS` |                  `5000` | JetStream publish timeout                       |
+| `LOG_LEVEL`                    |        `log,error,warn` | Nest logger levels                              |
 
 ## Configuration files
 

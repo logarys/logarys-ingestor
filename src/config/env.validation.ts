@@ -1,5 +1,11 @@
-export function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
-  const requiredNumberKeys = ['APP_PORT', 'NATS_TIMEOUT_MS', 'JETSTREAM_PUBLISH_TIMEOUT_MS'];
+export function validateEnv(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const requiredNumberKeys = [
+    "APP_PORT",
+    "NATS_TIMEOUT_MS",
+    "JETSTREAM_PUBLISH_TIMEOUT_MS",
+  ];
 
   for (const key of requiredNumberKeys) {
     const rawValue = config[key];
