@@ -3,6 +3,7 @@ import { Logger, ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
 import { ConfigService } from "@nestjs/config";
+import { PipelineService } from "./pipelines/services/pipeline.service.js";
 
 type EnvConfig = {
   appHost: string;
@@ -26,6 +27,10 @@ async function bootstrap(): Promise<void> {
   const config = app.get(ConfigService<EnvConfig, true>);
   const host = config.get("appHost", { infer: true });
   const port = config.get("appPort", { infer: true });
+
+  const pipelineService: PipelineService = app.get(PipelineService);
+  await pipelineService.initFromFileOrRemote();
+  setInterval(() => pipelineService.refresh(), 60000);
 
   await app.listen(port, host);
 

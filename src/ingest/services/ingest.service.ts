@@ -3,10 +3,10 @@ import type { Request } from "express";
 import type { NormalizedLog } from "small-log-normalizer";
 import { NatsJetstreamService } from "../../broker/services/nats-jetstream.service.js";
 import type { PipelineConfig } from "../../pipelines/domain/pipeline-config.type.js";
-import { PipelineConfigService } from "../../pipelines/services/pipeline-config.service.js";
 import { IngestLogDto } from "../dto/ingest-log.dto.js";
 import { EngineFactoryService } from "./engine-factory.service.js";
 import { PipelineTokenService } from "./pipeline-token.service.js";
+import { PipelineService } from "../../pipelines/services/pipeline.service.js";
 
 export interface IngestResult {
   accepted: true;
@@ -18,7 +18,7 @@ export interface IngestResult {
 @Injectable()
 export class IngestService {
   public constructor(
-    private readonly pipelineConfigService: PipelineConfigService,
+    private readonly pipelineService: PipelineService,
     private readonly pipelineTokenService: PipelineTokenService,
     private readonly engineFactoryService: EngineFactoryService,
     private readonly natsJetstreamService: NatsJetstreamService,
@@ -29,8 +29,11 @@ export class IngestService {
     dto: IngestLogDto,
     request: Request,
   ): Promise<IngestResult> {
-    const pipeline = this.pipelineConfigService.getBySource(source);
+    const pipeline = this.pipelineService.getPipeline(source);
 
+    if (!pipeline) {
+      throw new ConflictException(`Pipeline not found for source ${source}`);
+    }
     if (!pipeline.enabled) {
       throw new ConflictException(`Pipeline ${pipeline.id} is disabled`);
     }

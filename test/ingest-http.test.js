@@ -6,8 +6,9 @@ import { ValidationPipe } from "@nestjs/common";
 import { AppModule } from "../dist/app.module.js";
 import { NatsJetstreamService } from "../dist/broker/services/nats-jetstream.service.js";
 import { createTestConf } from "./helpers.js";
+import { startConsoleApiStub } from "./console-api-stub.js";
 
-async function createAppWithConf(conf) {
+async function createAppWithConf(conf, pipelines) {
   process.env.CONF_FILE = conf.confFile;
   process.env.CONF_PIPELINES_DIR = conf.pipelinesDir;
   process.env.APP_HOST = "127.0.0.1";
@@ -17,7 +18,11 @@ async function createAppWithConf(conf) {
   process.env.NATS_TIMEOUT_MS = "5000";
   process.env.JETSTREAM_PUBLISH_TIMEOUT_MS = "5000";
 
+  const consoleApi = await startConsoleApiStub(pipelines);
+  process.env.CONSOLE_URL = consoleApi.url;
+
   const publishCalls = [];
+
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
   })
@@ -30,6 +35,7 @@ async function createAppWithConf(conf) {
     .compile();
 
   const app = moduleRef.createNestApplication();
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -37,12 +43,39 @@ async function createAppWithConf(conf) {
       forbidUnknownValues: false,
     }),
   );
+
   await app.init();
 
-  return { app, publishCalls };
+  return { app, publishCalls, consoleApi };
 }
 
 test("POST /injest/:source normalizes and publishes one message", async () => {
+  const pipelines = [
+    {
+      id: "php-app",
+      source: "php-app",
+      enabled: true,
+      parser: {
+        type: "regex",
+        pattern:
+          "^(?<timestamp>\\S+\\s+\\S+)\\s+\\[(?<level>[A-Z]+)\\]\\s+(?<message>.*)$",
+      },
+      defaults: {
+        source: "php-app",
+        host: "app-01",
+        service: "booking-api",
+        env: "prod",
+      },
+      publish: {
+        subject: "logs.php.normalized",
+      },
+      security: {
+        mode: "header",
+        token: "secret-token",
+      },
+    },
+  ];
+
   const conf = await createTestConf({
     globalConfig: {
       defaults: {
@@ -52,34 +85,13 @@ test("POST /injest/:source normalizes and publishes one message", async () => {
         security: { mode: "none" },
       },
     },
-    pipelines: [
-      {
-        id: "php-app",
-        source: "php-app",
-        enabled: true,
-        parser: {
-          type: "regex",
-          pattern:
-            "^(?<timestamp>\\S+\\s+\\S+)\\s+\\[(?<level>[A-Z]+)\\]\\s+(?<message>.*)$",
-        },
-        defaults: {
-          source: "php-app",
-          host: "app-01",
-          service: "booking-api",
-          env: "prod",
-        },
-        publish: {
-          subject: "logs.php.normalized",
-        },
-        security: {
-          mode: "header",
-          token: "secret-token",
-        },
-      },
-    ],
+    pipelines,
   });
 
-  const { app, publishCalls } = await createAppWithConf(conf);
+  const { app, publishCalls, consoleApi } = await createAppWithConf(
+    conf,
+    pipelines,
+  );
 
   try {
     const response = await request(app.getHttpServer())
@@ -110,11 +122,28 @@ test("POST /injest/:source normalizes and publishes one message", async () => {
     assert.equal(publishCalls[0].headers["x-log-level"], "ERROR");
   } finally {
     await app.close();
+    await consoleApi.close();
     await conf.cleanup();
   }
 });
 
 test("POST /injest/:source rejects invalid token", async () => {
+  const pipelines = [
+    {
+      id: "secure-source",
+      source: "secure-source",
+      enabled: true,
+      parser: { type: "raw" },
+      publish: {
+        subject: "logs.secure",
+      },
+      security: {
+        mode: "query",
+        token: "query-secret",
+      },
+    },
+  ];
+
   const conf = await createTestConf({
     globalConfig: {
       defaults: {
@@ -124,19 +153,13 @@ test("POST /injest/:source rejects invalid token", async () => {
         security: { mode: "none" },
       },
     },
-    pipelines: [
-      {
-        id: "secure-source",
-        source: "secure-source",
-        enabled: true,
-        parser: { type: "raw" },
-        publish: { subject: "logs.secure" },
-        security: { mode: "query", token: "query-secret" },
-      },
-    ],
+    pipelines,
   });
 
-  const { app, publishCalls } = await createAppWithConf(conf);
+  const { app, publishCalls, consoleApi } = await createAppWithConf(
+    conf,
+    pipelines,
+  );
 
   try {
     const response = await request(app.getHttpServer())
@@ -148,31 +171,43 @@ test("POST /injest/:source rejects invalid token", async () => {
     assert.equal(publishCalls.length, 0);
   } finally {
     await app.close();
+    await consoleApi.close();
     await conf.cleanup();
   }
 });
 
 test("POST /injest/:source rejects disabled pipelines", async () => {
+  const pipelines = [
+    {
+      id: "disabled-pipeline",
+      source: "disabled-pipeline",
+      enabled: false,
+      parser: { type: "raw" },
+      publish: {
+        subject: "logs.disabled",
+      },
+      security: {
+        mode: "none",
+      },
+    },
+  ];
+
   const conf = await createTestConf({
     globalConfig: {
       defaults: {
         enabled: true,
         parser: { type: "raw" },
         publish: { subject: "logs.normalized" },
+        security: { mode: "none" },
       },
     },
-    pipelines: [
-      {
-        id: "disabled-pipeline",
-        source: "disabled-pipeline",
-        enabled: false,
-        parser: { type: "raw" },
-        publish: { subject: "logs.disabled" },
-      },
-    ],
+    pipelines,
   });
 
-  const { app, publishCalls } = await createAppWithConf(conf);
+  const { app, publishCalls, consoleApi } = await createAppWithConf(
+    conf,
+    pipelines,
+  );
 
   try {
     const response = await request(app.getHttpServer())
@@ -180,10 +215,11 @@ test("POST /injest/:source rejects disabled pipelines", async () => {
       .send({ raw: "hello world" })
       .expect(409);
 
-    assert.match(response.body.message, /disabled/);
+    assert.match(response.body.message, /disabled/i);
     assert.equal(publishCalls.length, 0);
   } finally {
     await app.close();
+    await consoleApi.close();
     await conf.cleanup();
   }
 });
