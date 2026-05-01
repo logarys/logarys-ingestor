@@ -1,6 +1,6 @@
 {
   "name": "logarys-ingestor",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "description": "NestJS HTTP log ingestion service publishing normalized logs to NATS JetStream.",
   "type": "module",
@@ -9,9 +9,10 @@
     "start": "node dist/main.js",
     "start:dev": "node --watch --loader ts-node/esm src/main.ts",
     "lint": "tsc -p tsconfig.build.json --noEmit",
-    "test": "npm run build && node --test",
+    "test": "./scripts/test-no-warnings.sh",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test:node": "node --test"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",

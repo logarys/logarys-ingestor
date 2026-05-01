@@ -6,6 +6,7 @@ import {
   Param,
   Post,
   Put,
+  UseGuards,
 } from "@nestjs/common";
 import type {
   GlobalPipelinesConfig,
@@ -15,41 +16,41 @@ import {
   UpsertPipelineDto,
   UpdateGlobalConfigDto,
 } from "../dto/pipeline.dto.js";
-import { PipelineConfigService } from "../services/pipeline-config.service.js";
+import { PipelineService } from "../services/pipeline.service.js";
+import { IngestorApiTokenGuard } from "../../security/ingestor-api-token.guard.js";
 
 @Controller("pipelines")
+@UseGuards(IngestorApiTokenGuard)
 export class PipelineConfigController {
-  public constructor(
-    private readonly pipelineConfigService: PipelineConfigService,
-  ) {}
+  public constructor(private readonly pipelineService: PipelineService) {}
 
   @Get()
   public getAll(): PipelineConfig[] {
-    return this.pipelineConfigService.getAll();
+    return this.pipelineService.getAllCached();
   }
 
   @Get("config")
-  public getGlobalConfig(): GlobalPipelinesConfig {
-    return this.pipelineConfigService.getGlobalConfig();
+  public async getGlobalConfig(): Promise<GlobalPipelinesConfig> {
+    return this.pipelineService.getGlobalConfig();
   }
 
   @Put("config")
   public async updateGlobalConfig(
     @Body() dto: UpdateGlobalConfigDto,
   ): Promise<GlobalPipelinesConfig> {
-    return this.pipelineConfigService.saveGlobalConfig({
+    return this.pipelineService.saveGlobalConfig({
       defaults: dto.defaults,
     });
   }
 
   @Get(":id")
-  public getOne(@Param("id") id: string): PipelineConfig {
-    return this.pipelineConfigService.getById(id);
+  public getOne(@Param("id") id: string): PipelineConfig | undefined {
+    return this.pipelineService.getAllCached().find((pipeline) => pipeline.id === id);
   }
 
   @Post()
   public async create(@Body() dto: UpsertPipelineDto): Promise<PipelineConfig> {
-    return this.pipelineConfigService.savePipeline(dto);
+    return this.pipelineService.createPipeline(dto);
   }
 
   @Put(":id")
@@ -57,22 +58,22 @@ export class PipelineConfigController {
     @Param("id") id: string,
     @Body() dto: UpsertPipelineDto,
   ): Promise<PipelineConfig> {
-    return this.pipelineConfigService.savePipeline({ ...dto, id });
+    return this.pipelineService.updatePipeline(id, { ...dto, id });
   }
 
   @Post(":id/enable")
   public async enable(@Param("id") id: string): Promise<PipelineConfig> {
-    return this.pipelineConfigService.setEnabled(id, true);
+    return this.pipelineService.setEnabled(id, true);
   }
 
   @Post(":id/disable")
   public async disable(@Param("id") id: string): Promise<PipelineConfig> {
-    return this.pipelineConfigService.setEnabled(id, false);
+    return this.pipelineService.setEnabled(id, false);
   }
 
   @Delete(":id")
   public async delete(@Param("id") id: string): Promise<{ deleted: true }> {
-    await this.pipelineConfigService.deletePipeline(id);
+    await this.pipelineService.deletePipeline(id);
     return { deleted: true };
   }
 }

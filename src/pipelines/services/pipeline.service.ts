@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from "@nestjs/common";
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { HttpService } from "@nestjs/axios";
 import process from "node:process";
 import { PipelineConfig } from "../domain/pipeline-config.type.js";
@@ -6,78 +6,287 @@ import { PipelineConfigService } from "./pipeline-config.service.js";
 
 @Injectable()
 export class PipelineService implements OnModuleInit {
+  private readonly logger = new Logger(PipelineService.name);
   private pipelines: Map<string, PipelineConfig> = new Map();
 
-  constructor(
+  public constructor(
     private readonly pipelineConfigService: PipelineConfigService,
     private readonly http: HttpService,
   ) {}
 
-  async onModuleInit() {
+  public async onModuleInit(): Promise<void> {
     await this.initFromFileOrRemote();
   }
 
-  async initFromFileOrRemote() {
-    const remote = await this.fetchRemote();
+  public async initFromFileOrRemote(): Promise<void> {
+    await this.pipelineConfigService.reload();
 
-    if (!remote || remote.length === 0) {
-      const localPipelines = this.pipelineConfigService.getAll();
+    const localPipelines = this.pipelineConfigService.getAll();
+    const remotePipelines = await this.fetchRemote();
 
-      await this.importToConsole(localPipelines);
+    if (remotePipelines.length === 0) {
+      await this.importToStorageManager(localPipelines);
       this.setPipelines(localPipelines);
-
       return;
     }
 
-    this.setPipelines(remote);
-  }
+    const remoteSources = new Set(remotePipelines.map((pipeline) => pipeline.source));
+    const missingLocalPipelines = localPipelines.filter(
+      (pipeline) => !remoteSources.has(pipeline.source),
+    );
 
-  private setPipelines(pipelines: PipelineConfig[]) {
-    this.pipelines.clear();
-
-    for (const p of pipelines) {
-      if (p.enabled) {
-        this.pipelines.set(p.source, p);
-      }
+    if (missingLocalPipelines.length > 0) {
+      await this.importToStorageManager(missingLocalPipelines);
+      const reloaded = await this.fetchRemote();
+      this.setPipelines(reloaded.length > 0 ? reloaded : [...remotePipelines, ...missingLocalPipelines]);
+      return;
     }
+
+    this.setPipelines(remotePipelines);
   }
 
-  getPipeline(source: string): PipelineConfig | undefined {
+  public getPipeline(source: string): PipelineConfig | undefined {
     return this.pipelines.get(source);
   }
 
-  async refresh() {
+  public getAllCached(): PipelineConfig[] {
+    return [...this.pipelines.values()].sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  public async refresh(): Promise<void> {
     const remote = await this.fetchRemote();
 
-    if (remote) {
+    if (remote.length > 0) {
       this.setPipelines(remote);
     }
   }
 
+  public async createPipeline(pipeline: PipelineConfig): Promise<PipelineConfig> {
+    const created = await this.postPipeline(pipeline);
+    await this.refreshAfterMutation();
+    return created;
+  }
+
+  public async updatePipeline(id: string, pipeline: PipelineConfig): Promise<PipelineConfig> {
+    const updated = await this.putPipeline(id, { ...pipeline, id });
+    await this.refreshAfterMutation();
+    return updated;
+  }
+
+  public async setEnabled(id: string, enabled: boolean): Promise<PipelineConfig> {
+    const updated = await this.postPipelineAction(id, enabled ? "enable" : "disable");
+    await this.refreshAfterMutation();
+    return updated;
+  }
+
+  public async deletePipeline(id: string): Promise<void> {
+    const url = this.getStorageManagerUrl();
+
+    if (!url) {
+      await this.pipelineConfigService.deletePipeline(id);
+      await this.initFromFileOrRemote();
+      return;
+    }
+
+    await this.http.axiosRef.delete(`${url}/pipelines/${encodeURIComponent(id)}`, {
+      headers: this.authHeaders(),
+    });
+
+    this.pipelines.delete(id);
+    await this.refreshAfterMutation();
+  }
+
+  public async getGlobalConfig() {
+    return this.pipelineConfigService.getGlobalConfig();
+  }
+
+  public async saveGlobalConfig(config: Parameters<PipelineConfigService["saveGlobalConfig"]>[0]) {
+    return this.pipelineConfigService.saveGlobalConfig(config);
+  }
+
+  private setPipelines(pipelines: PipelineConfig[]): void {
+    this.pipelines.clear();
+
+    for (const pipeline of pipelines) {
+      if (pipeline.source) {
+        this.pipelines.set(pipeline.source, pipeline);
+      }
+    }
+  }
+
   private async fetchRemote(): Promise<PipelineConfig[]> {
-    if (!process.env.CONSOLE_URL) {
+    const storageManagerUrl = this.getStorageManagerUrl();
+
+    if (!storageManagerUrl) {
       return [];
     }
 
     try {
-      const res = await this.http.axiosRef.get(
-        `${process.env.CONSOLE_URL}/pipelines`,
+      const res = await this.http.axiosRef.get(`${storageManagerUrl}/pipelines`, {
+        headers: this.authHeaders(),
+      });
+      return this.extractPipelines(res.data);
+    } catch (error) {
+      this.logger.error(
+        `Unable to fetch pipeline configuration from storage-manager: ${this.formatError(error)}`,
       );
-
-      return Array.isArray(res.data) ? res.data : [];
-    } catch {
       return [];
     }
   }
 
-  private async importToConsole(pipelines: PipelineConfig[]) {
-    if (!process.env.CONSOLE_URL) {
+  private async importToStorageManager(pipelines: PipelineConfig[]): Promise<void> {
+    if (pipelines.length === 0) {
       return;
     }
 
-    await this.http.axiosRef.post(
-      `${process.env.CONSOLE_URL}/pipelines/import`,
-      pipelines,
+    const storageManagerUrl = this.getStorageManagerUrl();
+
+    if (!storageManagerUrl) {
+      return;
+    }
+
+    const errors: string[] = [];
+
+    for (const pipeline of pipelines) {
+      try {
+        await this.http.axiosRef.post(`${storageManagerUrl}/pipelines`, pipeline, {
+          headers: this.authHeaders(),
+        });
+      } catch (error) {
+        errors.push(`${pipeline.id}: ${this.formatError(error)}`);
+      }
+    }
+
+    if (errors.length > 0) {
+      const message = `Unable to import local pipeline configuration to storage-manager. Attempts failed: ${errors.join(" | ")}`;
+      this.logger.error(message);
+      throw new Error(message);
+    }
+  }
+
+  private async postPipeline(pipeline: PipelineConfig): Promise<PipelineConfig> {
+    const url = this.getStorageManagerUrl();
+
+    if (!url) {
+      const saved = await this.pipelineConfigService.savePipeline(pipeline);
+      this.setPipelines(this.pipelineConfigService.getAll());
+      return saved;
+    }
+
+    const res = await this.http.axiosRef.post(`${url}/pipelines`, pipeline, {
+      headers: this.authHeaders(),
+    });
+
+    return res.data as PipelineConfig;
+  }
+
+  private async putPipeline(id: string, pipeline: PipelineConfig): Promise<PipelineConfig> {
+    const url = this.getStorageManagerUrl();
+
+    if (!url) {
+      const saved = await this.pipelineConfigService.savePipeline(pipeline);
+      this.setPipelines(this.pipelineConfigService.getAll());
+      return saved;
+    }
+
+    const res = await this.http.axiosRef.put(`${url}/pipelines/${encodeURIComponent(id)}`, pipeline, {
+      headers: this.authHeaders(),
+    });
+
+    return res.data as PipelineConfig;
+  }
+
+  private async postPipelineAction(id: string, action: "enable" | "disable"): Promise<PipelineConfig> {
+    const url = this.getStorageManagerUrl();
+
+    if (!url) {
+      const saved = await this.pipelineConfigService.setEnabled(id, action === "enable");
+      this.setPipelines(this.pipelineConfigService.getAll());
+      return saved;
+    }
+
+    const res = await this.http.axiosRef.post(
+      `${url}/pipelines/${encodeURIComponent(id)}/${action}`,
+      {},
+      { headers: this.authHeaders() },
     );
+
+    return res.data as PipelineConfig;
+  }
+
+  private async refreshAfterMutation(): Promise<void> {
+    const remote = await this.fetchRemote();
+
+    if (remote.length > 0) {
+      this.setPipelines(remote);
+      return;
+    }
+
+    this.setPipelines(this.pipelineConfigService.getAll());
+  }
+
+  private getStorageManagerUrl(): string | null {
+    const url =
+      process.env.STORAGE_MANAGER_URL ??
+      process.env.PIPELINE_CONFIG_URL;
+
+    if (!url) {
+      return null;
+    }
+
+    return url.replace(/\/+$/, "");
+  }
+
+  private authHeaders(): Record<string, string> {
+    const token =
+      process.env.STORAGE_MANAGER_API_TOKEN ??
+      process.env.INGESTOR_API_TOKEN ??
+      process.env.API_TOKEN;
+
+    if (!token) {
+      return {};
+    }
+
+    return {
+      Authorization: `Bearer ${token}`,
+    };
+  }
+
+  private extractPipelines(payload: unknown): PipelineConfig[] {
+    if (Array.isArray(payload)) {
+      return payload as PipelineConfig[];
+    }
+
+    if (!payload || typeof payload !== "object") {
+      return [];
+    }
+
+    const candidate = payload as {
+      pipelines?: unknown;
+      items?: unknown;
+      data?: unknown;
+    };
+
+    if (Array.isArray(candidate.pipelines)) {
+      return candidate.pipelines as PipelineConfig[];
+    }
+
+    if (Array.isArray(candidate.items)) {
+      return candidate.items as PipelineConfig[];
+    }
+
+    if (Array.isArray(candidate.data)) {
+      return candidate.data as PipelineConfig[];
+    }
+
+    return [];
+  }
+
+  private formatError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return String(error);
   }
 }

@@ -1,6 +1,16 @@
-version: "3.9"
-
 services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   nats:
     image: nats:2.11-alpine
     command:
@@ -15,13 +25,54 @@ services:
     volumes:
       - nats-data:/data
 
+  storage-manager:
+    build:
+      context: ../logarys-storage-manager
+      dockerfile: Dockerfile
+    image: logarys/storage-manager
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    ports:
+      - "3001:3000"
+    environment:
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "3000"
+      PORT: "3000"
+      MONGODB_URI: "mongodb://mongodb:27017"
+      MONGODB_DATABASE: "logarys"
+      MONGO_URL: "mongodb://mongodb:27017/logarys"
+      NATS_URL: "nats://nats:4222"
+      NATS_STREAM: "LOGS"
+      NATS_CONSUMER: "logarys-storage-manager"
+      NATS_SUBJECTS: "logs.>"
+      NATS_CLIENT_NAME: "logarys-storage-manager"
+      NATS_TIMEOUT_MS: "5000"
+      INGESTION_ENABLED: "false"
+      API_TOKEN: "functional-test-token"
+      LOG_LEVEL: "log,error"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const http=require('http'); const req=http.get({host:'127.0.0.1', port:3000, path:'/pipelines', headers:{Authorization:'Bearer functional-test-token'}}, res=>process.exit(res.statusCode < 500 ? 0 : 1)); req.on('error',()=>process.exit(1)); req.setTimeout(2000,()=>{req.destroy();process.exit(1);});\""
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
     image: logarys/ingestor
     depends_on:
-      - nats
+      nats:
+        condition: service_started
+      storage-manager:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
@@ -29,12 +80,14 @@ services:
       APP_PORT: "3000"
       CONF_FILE: "/conf/pipelines.json"
       CONF_PIPELINES_DIR: "/conf/pipelines.d"
-      CONSOLE_URL: ""
+      STORAGE_MANAGER_URL: "http://storage-manager:3000"
+      STORAGE_MANAGER_API_TOKEN: "functional-test-token"
+      INGESTOR_API_TOKEN: "functional-test-token"
       NATS_URL: "nats://nats:4222"
       NATS_CLIENT_NAME: "logarys-ingestor"
       NATS_TIMEOUT_MS: "5000"
       JETSTREAM_PUBLISH_TIMEOUT_MS: "5000"
-      LOG_LEVEL: "log,error,warn,debug"
+      LOG_LEVEL: "log,error"
     volumes:
       - .:/app
       - ./conf:/conf
@@ -42,3 +95,4 @@ services:
 
 volumes:
   nats-data:
+  mongodb-data:

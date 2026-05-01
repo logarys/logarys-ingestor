@@ -19,7 +19,10 @@ async function createAppWithConf(conf, pipelines) {
   process.env.JETSTREAM_PUBLISH_TIMEOUT_MS = "5000";
 
   const consoleApi = await startConsoleApiStub(pipelines);
-  process.env.CONSOLE_URL = consoleApi.url;
+  delete process.env.CONSOLE_URL;
+  process.env.STORAGE_MANAGER_URL = consoleApi.url;
+  process.env.STORAGE_MANAGER_API_TOKEN = "functional-test-token";
+  process.env.INGESTOR_API_TOKEN = "functional-test-token";
 
   const publishCalls = [];
 
@@ -217,6 +220,54 @@ test("POST /injest/:source rejects disabled pipelines", async () => {
 
     assert.match(response.body.message, /disabled/i);
     assert.equal(publishCalls.length, 0);
+  } finally {
+    await app.close();
+    await consoleApi.close();
+    await conf.cleanup();
+  }
+});
+test("ingestor bootstraps local file pipelines into storage-manager when remote DB is empty", async () => {
+  const pipelines = [
+    {
+      id: "bootstrap-app",
+      source: "bootstrap-app",
+      enabled: true,
+      parser: { type: "raw" },
+      publish: {
+        subject: "logs.bootstrap",
+      },
+      security: {
+        mode: "none",
+      },
+    },
+  ];
+
+  const conf = await createTestConf({
+    globalConfig: {
+      defaults: {
+        enabled: true,
+        parser: { type: "raw" },
+        publish: { subject: "logs.normalized" },
+        security: { mode: "none" },
+      },
+    },
+    pipelines,
+  });
+
+  const { app, publishCalls, consoleApi } = await createAppWithConf(conf, []);
+
+  try {
+    assert.equal(consoleApi.getPipelines().length, 1);
+    assert.equal(consoleApi.getPipelines()[0].source, "bootstrap-app");
+    assert.equal(consoleApi.getImportCalls().length, 1);
+
+    await request(app.getHttpServer())
+      .post("/injest/bootstrap-app")
+      .send({ raw: "hello world" })
+      .expect(201);
+
+    assert.equal(publishCalls.length, 1);
+    assert.equal(publishCalls[0].subject, "logs.bootstrap");
   } finally {
     await app.close();
     await consoleApi.close();
