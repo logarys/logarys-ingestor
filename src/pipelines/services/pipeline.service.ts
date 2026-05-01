@@ -1,13 +1,19 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from "@nestjs/common";
 import { HttpService } from "@nestjs/axios";
 import process from "node:process";
 import { PipelineConfig } from "../domain/pipeline-config.type.js";
 import { PipelineConfigService } from "./pipeline-config.service.js";
 
 @Injectable()
-export class PipelineService implements OnModuleInit {
+export class PipelineService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PipelineService.name);
   private pipelines: Map<string, PipelineConfig> = new Map();
+  private refreshTimer?: NodeJS.Timeout;
 
   public constructor(
     private readonly pipelineConfigService: PipelineConfigService,
@@ -16,39 +22,50 @@ export class PipelineService implements OnModuleInit {
 
   public async onModuleInit(): Promise<void> {
     await this.initFromFileOrRemote();
+    this.startRefreshTimer();
   }
 
+  public onModuleDestroy(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+    }
+  }
+
+  /**
+   * Bootstrap rules:
+   * - storage-manager/MongoDB is the source of truth when it already has pipelines.
+   * - local files are imported only when the remote pipeline collection is empty.
+   * - when remote pipelines exist, local files are rewritten from remote config.
+   */
   public async initFromFileOrRemote(): Promise<void> {
     await this.pipelineConfigService.reload();
 
-    const localPipelines = this.pipelineConfigService.getAll();
     const remotePipelines = await this.fetchRemote();
 
-    if (remotePipelines.length === 0) {
+    if (remotePipelines.length > 0) {
+      this.setPipelines(remotePipelines);
+      await this.rewriteLocalFilesFromRemote(remotePipelines);
+      return;
+    }
+
+    const localPipelines = this.pipelineConfigService.getAll();
+
+    if (localPipelines.length > 0) {
       await this.importToStorageManager(localPipelines);
-      this.setPipelines(localPipelines);
+      const reloadedRemotePipelines = await this.fetchRemote();
+      const effectivePipelines =
+        reloadedRemotePipelines.length > 0 ? reloadedRemotePipelines : localPipelines;
+
+      this.setPipelines(effectivePipelines);
+
+      if (reloadedRemotePipelines.length > 0) {
+        await this.rewriteLocalFilesFromRemote(reloadedRemotePipelines);
+      }
+
       return;
     }
 
-    const remoteSources = new Set(
-      remotePipelines.map((pipeline) => pipeline.source),
-    );
-    const missingLocalPipelines = localPipelines.filter(
-      (pipeline) => !remoteSources.has(pipeline.source),
-    );
-
-    if (missingLocalPipelines.length > 0) {
-      await this.importToStorageManager(missingLocalPipelines);
-      const reloaded = await this.fetchRemote();
-      this.setPipelines(
-        reloaded.length > 0
-          ? reloaded
-          : [...remotePipelines, ...missingLocalPipelines],
-      );
-      return;
-    }
-
-    this.setPipelines(remotePipelines);
+    this.setPipelines([]);
   }
 
   public getPipeline(source: string): PipelineConfig | undefined {
@@ -66,7 +83,21 @@ export class PipelineService implements OnModuleInit {
 
     if (remote.length > 0) {
       this.setPipelines(remote);
+      await this.rewriteLocalFilesFromRemote(remote);
+      return;
     }
+
+    await this.pipelineConfigService.reload();
+    const localPipelines = this.pipelineConfigService.getAll();
+
+    if (localPipelines.length > 0) {
+      await this.importToStorageManager(localPipelines);
+      const reloaded = await this.fetchRemote();
+      this.setPipelines(reloaded.length > 0 ? reloaded : localPipelines);
+      return;
+    }
+
+    this.setPipelines([]);
   }
 
   public async createPipeline(
@@ -126,6 +157,27 @@ export class PipelineService implements OnModuleInit {
     config: Parameters<PipelineConfigService["saveGlobalConfig"]>[0],
   ) {
     return this.pipelineConfigService.saveGlobalConfig(config);
+  }
+
+  private startRefreshTimer(): void {
+    const refreshMs = Number.parseInt(
+      process.env.PIPELINE_CONFIG_REFRESH_MS ?? "30000",
+      10,
+    );
+
+    if (!Number.isFinite(refreshMs) || refreshMs <= 0) {
+      return;
+    }
+
+    this.refreshTimer = setInterval(() => {
+      this.refresh().catch((error: unknown) => {
+        this.logger.error(
+          `Unable to refresh pipeline configuration from storage-manager: ${this.formatError(error)}`,
+        );
+      });
+    }, refreshMs);
+
+    this.refreshTimer.unref?.();
   }
 
   private setPipelines(pipelines: PipelineConfig[]): void {
@@ -273,10 +325,25 @@ export class PipelineService implements OnModuleInit {
 
     if (remote.length > 0) {
       this.setPipelines(remote);
+      await this.rewriteLocalFilesFromRemote(remote);
       return;
     }
 
+    await this.pipelineConfigService.reload();
     this.setPipelines(this.pipelineConfigService.getAll());
+  }
+
+  private async rewriteLocalFilesFromRemote(
+    pipelines: PipelineConfig[],
+  ): Promise<void> {
+    try {
+      await this.pipelineConfigService.replacePipelines(pipelines);
+    } catch (error) {
+      this.logger.error(
+        `Unable to rewrite local pipeline files from storage-manager configuration: ${this.formatError(error)}`,
+      );
+      throw error;
+    }
   }
 
   private toStorageManagerPipeline(pipeline: PipelineConfig): PipelineConfig {

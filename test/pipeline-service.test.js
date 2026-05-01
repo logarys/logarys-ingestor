@@ -5,6 +5,7 @@ import { PipelineService } from "../dist/pipelines/services/pipeline.service.js"
 
 function createLocalConfigService(pipelines) {
   let reloadCalls = 0;
+  let replaceCalls = [];
 
   return {
     async reload() {
@@ -12,6 +13,10 @@ function createLocalConfigService(pipelines) {
     },
     getAll() {
       return pipelines;
+    },
+    async replacePipelines(nextPipelines) {
+      replaceCalls.push(nextPipelines);
+      pipelines = nextPipelines;
     },
     async savePipeline(pipeline) {
       pipelines = [
@@ -37,6 +42,9 @@ function createLocalConfigService(pipelines) {
     },
     get reloadCalls() {
       return reloadCalls;
+    },
+    get replaceCalls() {
+      return replaceCalls;
     },
   };
 }
@@ -133,7 +141,7 @@ test("PipelineService imports local pipelines when storage-manager has no pipeli
   assert.equal(service.getPipeline("php-app")?.id, "php-app");
 });
 
-test("PipelineService imports only local pipelines missing from storage-manager", async () => {
+test("PipelineService does not import local pipelines when storage-manager already has pipelines", async () => {
   resetEnv();
 
   const remotePipeline = {
@@ -145,7 +153,7 @@ test("PipelineService imports only local pipelines missing from storage-manager"
     security: { mode: "none" },
   };
 
-  const missingLocalPipeline = {
+  const localPipeline = {
     id: "local-app",
     source: "local-app",
     enabled: true,
@@ -154,19 +162,17 @@ test("PipelineService imports only local pipelines missing from storage-manager"
     security: { mode: "none" },
   };
 
-  const localConfig = createLocalConfigService([
-    remotePipeline,
-    missingLocalPipeline,
-  ]);
+  const localConfig = createLocalConfigService([localPipeline]);
   const http = createHttpService({ remotePipelines: [remotePipeline] });
   const service = new PipelineService(localConfig, http);
 
   await service.initFromFileOrRemote();
 
-  assert.equal(http.posts.length, 1);
-  assert.deepEqual(http.posts[0].body, missingLocalPipeline);
+  assert.equal(http.posts.length, 0);
   assert.equal(service.getPipeline("remote-app")?.id, "remote-app");
-  assert.equal(service.getPipeline("local-app")?.id, "local-app");
+  assert.equal(service.getPipeline("local-app"), undefined);
+  assert.equal(localConfig.replaceCalls.length, 1);
+  assert.deepEqual(localConfig.replaceCalls[0], [remotePipeline]);
 });
 
 test("PipelineService keeps disabled pipelines in cache so ingestion can return disabled conflict", async () => {
@@ -188,6 +194,37 @@ test("PipelineService keeps disabled pipelines in cache so ingestion can return 
   await service.initFromFileOrRemote();
 
   assert.equal(service.getPipeline("disabled-pipeline")?.enabled, false);
+});
+
+test("PipelineService refreshes cache from storage-manager updates", async () => {
+  resetEnv();
+
+  const firstPipeline = {
+    id: "app",
+    source: "app",
+    enabled: true,
+    parser: { type: "raw" },
+    publish: { subject: "logs.old" },
+    security: { mode: "none" },
+  };
+
+  const updatedPipeline = {
+    ...firstPipeline,
+    publish: { subject: "logs.new" },
+  };
+
+  const localConfig = createLocalConfigService([]);
+  const http = createHttpService({ remotePipelines: [firstPipeline] });
+  const service = new PipelineService(localConfig, http);
+
+  await service.initFromFileOrRemote();
+  assert.equal(service.getPipeline("app")?.publish.subject, "logs.old");
+
+  http.setRemotePipelines([updatedPipeline]);
+  await service.refresh();
+
+  assert.equal(service.getPipeline("app")?.publish.subject, "logs.new");
+  assert.deepEqual(localConfig.replaceCalls.at(-1), [updatedPipeline]);
 });
 
 test("PipelineService CRUD proxies mutations to storage-manager", async () => {

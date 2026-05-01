@@ -90,6 +90,30 @@ export class PipelineConfigService implements OnModuleInit {
     return pipeline;
   }
 
+
+  public async replacePipelines(pipelines: PipelineConfig[]): Promise<void> {
+    const pipelinesDir = this.configService.get<string>("confPipelinesDir", {
+      infer: true,
+    })!;
+
+    await fs.mkdir(pipelinesDir, { recursive: true });
+
+    const entries = await fs.readdir(pipelinesDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".json")) {
+        await fs.rm(path.join(pipelinesDir, entry.name), { force: true });
+      }
+    }
+
+    for (const pipeline of pipelines) {
+      const filename = `${this.safeFilename(pipeline.id)}.json`;
+      await this.writeJsonFile(path.join(pipelinesDir, filename), pipeline);
+    }
+
+    await this.reload();
+  }
+
   public async saveGlobalConfig(
     config: GlobalPipelinesConfig,
   ): Promise<GlobalPipelinesConfig> {
@@ -126,6 +150,11 @@ export class PipelineConfigService implements OnModuleInit {
     const filepath = path.join(pipelinesDir, `${id}.json`);
     await fs.rm(filepath, { force: true });
     await this.reload();
+  }
+
+
+  private safeFilename(value: string): string {
+    return value.replace(/[^a-zA-Z0-9_.-]/g, "_");
   }
 
   private mergeWithGlobalDefaults(pipeline: PipelineConfig): PipelineConfig {
