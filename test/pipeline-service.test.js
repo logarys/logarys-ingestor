@@ -14,7 +14,10 @@ function createLocalConfigService(pipelines) {
       return pipelines;
     },
     async savePipeline(pipeline) {
-      pipelines = [...pipelines.filter((item) => item.id !== pipeline.id), pipeline];
+      pipelines = [
+        ...pipelines.filter((item) => item.id !== pipeline.id),
+        pipeline,
+      ];
       return pipeline;
     },
     async setEnabled(id, enabled) {
@@ -68,7 +71,10 @@ function createHttpService({ remotePipelines = [], failImport = false } = {}) {
         if (url.endsWith("/enable") || url.endsWith("/disable")) {
           const id = decodeURIComponent(url.split("/").at(-2));
           const enabled = url.endsWith("/enable");
-          const current = remote.find((item) => item.id === id) ?? { id, source: id };
+          const current = remote.find((item) => item.id === id) ?? {
+            id,
+            source: id,
+          };
           const updated = { ...current, enabled };
           remote = [...remote.filter((item) => item.id !== id), updated];
           return { status: 201, data: updated };
@@ -148,7 +154,10 @@ test("PipelineService imports only local pipelines missing from storage-manager"
     security: { mode: "none" },
   };
 
-  const localConfig = createLocalConfigService([remotePipeline, missingLocalPipeline]);
+  const localConfig = createLocalConfigService([
+    remotePipeline,
+    missingLocalPipeline,
+  ]);
   const http = createHttpService({ remotePipelines: [remotePipeline] });
   const service = new PipelineService(localConfig, http);
 
@@ -204,10 +213,73 @@ test("PipelineService CRUD proxies mutations to storage-manager", async () => {
   assert.equal(http.puts[0].url, "http://storage.test/pipelines/crud-app");
 
   await service.setEnabled("crud-app", true);
-  assert.equal(http.posts.at(-1).url, "http://storage.test/pipelines/crud-app/enable");
+  assert.equal(
+    http.posts.at(-1).url,
+    "http://storage.test/pipelines/crud-app/enable",
+  );
 
   await service.deletePipeline("crud-app");
   assert.equal(http.deletes[0].url, "http://storage.test/pipelines/crud-app");
+});
+
+test("PipelineService converts legacy local file pipelines before sending them to storage-manager", async () => {
+  resetEnv();
+
+  const legacyPipeline = {
+    id: "locafire-docker",
+    name: "Locafire Docker",
+    source: "locafire-docker",
+    enabled: true,
+    parser: {
+      type: "regex",
+      regex:
+        "^timestamp=(?<timestamp>\\S+)\\s+level=(?<level>\\S+)\\s+msg=(?<message>.*)$",
+      mappings: {
+        timestamp: "timestamp",
+      },
+    },
+    mappings: {
+      timestamp: "timestamp",
+      level: "level",
+      message: "message",
+    },
+    defaults: {
+      source: "locafire-docker",
+      host: "locafire-prod-1",
+      environment: "production",
+      job: "docker",
+      level: "info",
+    },
+    publish: {},
+    security: { mode: "none" },
+  };
+
+  const localConfig = createLocalConfigService([legacyPipeline]);
+  const http = createHttpService({ remotePipelines: [] });
+  const service = new PipelineService(localConfig, http);
+
+  await service.initFromFileOrRemote();
+
+  assert.equal(http.posts.length, 1);
+  assert.deepEqual(http.posts[0].body, {
+    id: "locafire-docker",
+    source: "locafire-docker",
+    enabled: true,
+    parser: {
+      type: "regex",
+      pattern:
+        "^timestamp=(?<timestamp>\\S+)\\s+level=(?<level>\\S+)\\s+msg=(?<message>.*)$",
+    },
+    defaults: {
+      source: "locafire-docker",
+      host: "locafire-prod-1",
+      env: "production",
+    },
+    publish: {
+      subject: "logs.locafire-docker.normalized",
+    },
+    security: { mode: "none" },
+  });
 });
 
 test("PipelineService fails when storage-manager import fails", async () => {
@@ -242,6 +314,9 @@ test("PipelineService fails when storage-manager import fails", async () => {
   }
 
   assert.equal(http.posts.length, 1);
-  assert.match(loggedErrors.join("\n"), /Unable to import local pipeline configuration/);
+  assert.match(
+    loggedErrors.join("\n"),
+    /Unable to import local pipeline configuration/,
+  );
   assert.equal(service.getPipeline("local-app"), undefined);
 });

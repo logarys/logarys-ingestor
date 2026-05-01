@@ -30,7 +30,9 @@ export class PipelineService implements OnModuleInit {
       return;
     }
 
-    const remoteSources = new Set(remotePipelines.map((pipeline) => pipeline.source));
+    const remoteSources = new Set(
+      remotePipelines.map((pipeline) => pipeline.source),
+    );
     const missingLocalPipelines = localPipelines.filter(
       (pipeline) => !remoteSources.has(pipeline.source),
     );
@@ -38,7 +40,11 @@ export class PipelineService implements OnModuleInit {
     if (missingLocalPipelines.length > 0) {
       await this.importToStorageManager(missingLocalPipelines);
       const reloaded = await this.fetchRemote();
-      this.setPipelines(reloaded.length > 0 ? reloaded : [...remotePipelines, ...missingLocalPipelines]);
+      this.setPipelines(
+        reloaded.length > 0
+          ? reloaded
+          : [...remotePipelines, ...missingLocalPipelines],
+      );
       return;
     }
 
@@ -50,7 +56,9 @@ export class PipelineService implements OnModuleInit {
   }
 
   public getAllCached(): PipelineConfig[] {
-    return [...this.pipelines.values()].sort((a, b) => a.id.localeCompare(b.id));
+    return [...this.pipelines.values()].sort((a, b) =>
+      a.id.localeCompare(b.id),
+    );
   }
 
   public async refresh(): Promise<void> {
@@ -61,20 +69,31 @@ export class PipelineService implements OnModuleInit {
     }
   }
 
-  public async createPipeline(pipeline: PipelineConfig): Promise<PipelineConfig> {
+  public async createPipeline(
+    pipeline: PipelineConfig,
+  ): Promise<PipelineConfig> {
     const created = await this.postPipeline(pipeline);
     await this.refreshAfterMutation();
     return created;
   }
 
-  public async updatePipeline(id: string, pipeline: PipelineConfig): Promise<PipelineConfig> {
+  public async updatePipeline(
+    id: string,
+    pipeline: PipelineConfig,
+  ): Promise<PipelineConfig> {
     const updated = await this.putPipeline(id, { ...pipeline, id });
     await this.refreshAfterMutation();
     return updated;
   }
 
-  public async setEnabled(id: string, enabled: boolean): Promise<PipelineConfig> {
-    const updated = await this.postPipelineAction(id, enabled ? "enable" : "disable");
+  public async setEnabled(
+    id: string,
+    enabled: boolean,
+  ): Promise<PipelineConfig> {
+    const updated = await this.postPipelineAction(
+      id,
+      enabled ? "enable" : "disable",
+    );
     await this.refreshAfterMutation();
     return updated;
   }
@@ -88,9 +107,12 @@ export class PipelineService implements OnModuleInit {
       return;
     }
 
-    await this.http.axiosRef.delete(`${url}/pipelines/${encodeURIComponent(id)}`, {
-      headers: this.authHeaders(),
-    });
+    await this.http.axiosRef.delete(
+      `${url}/pipelines/${encodeURIComponent(id)}`,
+      {
+        headers: this.authHeaders(),
+      },
+    );
 
     this.pipelines.delete(id);
     await this.refreshAfterMutation();
@@ -100,7 +122,9 @@ export class PipelineService implements OnModuleInit {
     return this.pipelineConfigService.getGlobalConfig();
   }
 
-  public async saveGlobalConfig(config: Parameters<PipelineConfigService["saveGlobalConfig"]>[0]) {
+  public async saveGlobalConfig(
+    config: Parameters<PipelineConfigService["saveGlobalConfig"]>[0],
+  ) {
     return this.pipelineConfigService.saveGlobalConfig(config);
   }
 
@@ -122,9 +146,12 @@ export class PipelineService implements OnModuleInit {
     }
 
     try {
-      const res = await this.http.axiosRef.get(`${storageManagerUrl}/pipelines`, {
-        headers: this.authHeaders(),
-      });
+      const res = await this.http.axiosRef.get(
+        `${storageManagerUrl}/pipelines`,
+        {
+          headers: this.authHeaders(),
+        },
+      );
       return this.extractPipelines(res.data);
     } catch (error) {
       this.logger.error(
@@ -134,7 +161,9 @@ export class PipelineService implements OnModuleInit {
     }
   }
 
-  private async importToStorageManager(pipelines: PipelineConfig[]): Promise<void> {
+  private async importToStorageManager(
+    pipelines: PipelineConfig[],
+  ): Promise<void> {
     if (pipelines.length === 0) {
       return;
     }
@@ -148,10 +177,16 @@ export class PipelineService implements OnModuleInit {
     const errors: string[] = [];
 
     for (const pipeline of pipelines) {
+      const payload = this.toStorageManagerPipeline(pipeline);
+
       try {
-        await this.http.axiosRef.post(`${storageManagerUrl}/pipelines`, pipeline, {
-          headers: this.authHeaders(),
-        });
+        await this.http.axiosRef.post(
+          `${storageManagerUrl}/pipelines`,
+          payload,
+          {
+            headers: this.authHeaders(),
+          },
+        );
       } catch (error) {
         errors.push(`${pipeline.id}: ${this.formatError(error)}`);
       }
@@ -164,7 +199,9 @@ export class PipelineService implements OnModuleInit {
     }
   }
 
-  private async postPipeline(pipeline: PipelineConfig): Promise<PipelineConfig> {
+  private async postPipeline(
+    pipeline: PipelineConfig,
+  ): Promise<PipelineConfig> {
     const url = this.getStorageManagerUrl();
 
     if (!url) {
@@ -173,14 +210,21 @@ export class PipelineService implements OnModuleInit {
       return saved;
     }
 
-    const res = await this.http.axiosRef.post(`${url}/pipelines`, pipeline, {
-      headers: this.authHeaders(),
-    });
+    const res = await this.http.axiosRef.post(
+      `${url}/pipelines`,
+      this.toStorageManagerPipeline(pipeline),
+      {
+        headers: this.authHeaders(),
+      },
+    );
 
     return res.data as PipelineConfig;
   }
 
-  private async putPipeline(id: string, pipeline: PipelineConfig): Promise<PipelineConfig> {
+  private async putPipeline(
+    id: string,
+    pipeline: PipelineConfig,
+  ): Promise<PipelineConfig> {
     const url = this.getStorageManagerUrl();
 
     if (!url) {
@@ -189,18 +233,28 @@ export class PipelineService implements OnModuleInit {
       return saved;
     }
 
-    const res = await this.http.axiosRef.put(`${url}/pipelines/${encodeURIComponent(id)}`, pipeline, {
-      headers: this.authHeaders(),
-    });
+    const res = await this.http.axiosRef.put(
+      `${url}/pipelines/${encodeURIComponent(id)}`,
+      this.toStorageManagerPipeline(pipeline),
+      {
+        headers: this.authHeaders(),
+      },
+    );
 
     return res.data as PipelineConfig;
   }
 
-  private async postPipelineAction(id: string, action: "enable" | "disable"): Promise<PipelineConfig> {
+  private async postPipelineAction(
+    id: string,
+    action: "enable" | "disable",
+  ): Promise<PipelineConfig> {
     const url = this.getStorageManagerUrl();
 
     if (!url) {
-      const saved = await this.pipelineConfigService.setEnabled(id, action === "enable");
+      const saved = await this.pipelineConfigService.setEnabled(
+        id,
+        action === "enable",
+      );
       this.setPipelines(this.pipelineConfigService.getAll());
       return saved;
     }
@@ -225,10 +279,60 @@ export class PipelineService implements OnModuleInit {
     this.setPipelines(this.pipelineConfigService.getAll());
   }
 
+  private toStorageManagerPipeline(pipeline: PipelineConfig): PipelineConfig {
+    const parser = pipeline.parser as PipelineConfig["parser"] & {
+      regex?: string;
+    };
+    const parserPattern = parser.pattern ?? parser.regex;
+
+    const nextParser: PipelineConfig["parser"] = {
+      type: parser.type,
+    };
+
+    if (parserPattern) {
+      nextParser.pattern = parserPattern;
+    }
+
+    const defaults = this.compactObject({
+      source: pipeline.defaults?.source,
+      host: pipeline.defaults?.host,
+      service: pipeline.defaults?.service,
+      env:
+        pipeline.defaults?.env ??
+        (
+          pipeline.defaults as
+            | (PipelineConfig["defaults"] & { environment?: string })
+            | undefined
+        )?.environment,
+    });
+
+    const publish = {
+      subject:
+        pipeline.publish?.subject ?? `logs.${pipeline.source}.normalized`,
+    };
+
+    return this.compactObject({
+      id: pipeline.id,
+      source: pipeline.source,
+      enabled: pipeline.enabled,
+      parser: nextParser,
+      defaults: Object.keys(defaults).length > 0 ? defaults : undefined,
+      publish,
+      security: pipeline.security ?? { mode: "none" },
+    }) as PipelineConfig;
+  }
+
+  private compactObject<T extends Record<string, unknown>>(
+    payload: T,
+  ): Partial<T> {
+    return Object.fromEntries(
+      Object.entries(payload).filter(([, value]) => value !== undefined),
+    ) as Partial<T>;
+  }
+
   private getStorageManagerUrl(): string | null {
     const url =
-      process.env.STORAGE_MANAGER_URL ??
-      process.env.PIPELINE_CONFIG_URL;
+      process.env.STORAGE_MANAGER_URL ?? process.env.PIPELINE_CONFIG_URL;
 
     if (!url) {
       return null;

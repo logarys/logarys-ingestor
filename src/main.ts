@@ -28,11 +28,10 @@ async function bootstrap(): Promise<void> {
   const host = config.get("appHost", { infer: true });
   const port = config.get("appPort", { infer: true });
 
-  const pipelineService: PipelineService = app.get(PipelineService);
-  await pipelineService.initFromFileOrRemote();
-  setInterval(() => pipelineService.refresh(), 60000);
-
   await app.listen(port, host);
+
+  const pipelineService: PipelineService = app.get(PipelineService);
+  setInterval(() => pipelineService.refresh(), 60000);
 
   Logger.log(`Log ingestor listening on http://${host}:${port}`, "Bootstrap");
 }
@@ -40,7 +39,9 @@ async function bootstrap(): Promise<void> {
 bootstrap().catch((error: unknown) => {
   const logger = new Logger("Bootstrap");
   logger.error(
-    error instanceof Error ? error.message : "Unknown bootstrap error",
+    error instanceof Error
+      ? (error.stack ?? error.message)
+      : "Unknown bootstrap error",
   );
   process.exit(1);
 });
