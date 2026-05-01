@@ -3,7 +3,7 @@ import type { Request } from "express";
 import { IngestLogDto } from "../dto/ingest-log.dto.js";
 import { IngestResult, IngestService } from "../services/ingest.service.js";
 
-@Controller("injest")
+@Controller("ingest")
 export class IngestController {
   public constructor(private readonly ingestService: IngestService) {}
 
