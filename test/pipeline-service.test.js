@@ -319,6 +319,47 @@ test("PipelineService converts legacy local file pipelines before sending them t
   });
 });
 
+
+
+test("PipelineService refresh does not re-import local files when storage-manager collection becomes empty", async () => {
+  resetEnv();
+
+  const localPipeline = {
+    id: "local-app",
+    source: "local-app",
+    enabled: true,
+    parser: { type: "raw" },
+    publish: { subject: "logs.local" },
+    security: { mode: "none" },
+  };
+
+  const remotePipeline = {
+    id: "remote-app",
+    source: "remote-app",
+    enabled: true,
+    parser: { type: "raw" },
+    publish: { subject: "logs.remote" },
+    security: { mode: "none" },
+  };
+
+  const localConfig = createLocalConfigService([localPipeline]);
+  const http = createHttpService({ remotePipelines: [remotePipeline] });
+  const service = new PipelineService(localConfig, http);
+
+  await service.initFromFileOrRemote();
+
+  assert.equal(http.posts.length, 0);
+  assert.equal(service.getPipeline("remote-app")?.id, "remote-app");
+  assert.equal(service.getPipeline("local-app"), undefined);
+
+  http.setRemotePipelines([]);
+  await service.refresh();
+
+  assert.equal(http.posts.length, 0);
+  assert.equal(service.getPipeline("remote-app"), undefined);
+  assert.equal(service.getPipeline("local-app"), undefined);
+});
+
 test("PipelineService fails when storage-manager import fails", async () => {
   resetEnv();
 

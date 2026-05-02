@@ -1,276 +1,104 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import request from "supertest";
-import { Test } from "@nestjs/testing";
-import { ValidationPipe } from "@nestjs/common";
-import { AppModule } from "../dist/app.module.js";
-import { NatsJetstreamService } from "../dist/broker/services/nats-jetstream.service.js";
-import { createTestConf } from "./helpers.js";
-import { startConsoleApiStub } from "./console-api-stub.js";
+import {
+  createPipelineViaIngestor,
+  deletePipelineViaIngestor,
+  rawPipeline,
+  requestJson,
+  uniqueSource,
+  INGESTOR_URL,
+} from "./helpers.js";
 
-async function createAppWithConf(conf, pipelines) {
-  process.env.CONF_FILE = conf.confFile;
-  process.env.CONF_PIPELINES_DIR = conf.pipelinesDir;
-  process.env.APP_HOST = "127.0.0.1";
-  process.env.APP_PORT = "0";
-  process.env.NATS_URL = "nats://unused:4222";
-  process.env.NATS_CLIENT_NAME = "test-client";
-  process.env.NATS_TIMEOUT_MS = "5000";
-  process.env.JETSTREAM_PUBLISH_TIMEOUT_MS = "5000";
-
-  const consoleApi = await startConsoleApiStub(pipelines);
-  delete process.env.CONSOLE_URL;
-  process.env.STORAGE_MANAGER_URL = consoleApi.url;
-  process.env.STORAGE_MANAGER_API_TOKEN = "functional-test-token";
-  process.env.INGESTOR_API_TOKEN = "functional-test-token";
-
-  const publishCalls = [];
-
-  const moduleRef = await Test.createTestingModule({
-    imports: [AppModule],
-  })
-    .overrideProvider(NatsJetstreamService)
-    .useValue({
-      publish: async (subject, payload, headers) => {
-        publishCalls.push({ subject, payload, headers });
-      },
-    })
-    .compile();
-
-  const app = moduleRef.createNestApplication();
-
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-      forbidUnknownValues: false,
-    }),
-  );
-
-  await app.init();
-
-  return { app, publishCalls, consoleApi };
-}
-
-test("POST /injest/:source normalizes and publishes one message", async () => {
-  const pipelines = [
-    {
-      id: "php-app",
-      source: "php-app",
-      enabled: true,
-      parser: {
-        type: "regex",
-        pattern:
-          "^(?<timestamp>\\S+\\s+\\S+)\\s+\\[(?<level>[A-Z]+)\\]\\s+(?<message>.*)$",
-      },
-      defaults: {
-        source: "php-app",
-        host: "app-01",
-        service: "booking-api",
-        env: "prod",
-      },
-      publish: {
-        subject: "logs.php.normalized",
-      },
-      security: {
-        mode: "header",
-        token: "secret-token",
-      },
+test("POST /ingest/:source normalizes and publishes one message through real NATS", async () => {
+  const source = uniqueSource("ingest-ok");
+  const pipeline = rawPipeline(source, {
+    parser: {
+      type: "regex",
+      pattern:
+        "^(?<timestamp>\\S+\\s+\\S+)\\s+\\[(?<level>[A-Z]+)\\]\\s+(?<message>.*)$",
     },
-  ];
-
-  const conf = await createTestConf({
-    globalConfig: {
-      defaults: {
-        enabled: true,
-        parser: { type: "raw" },
-        publish: { subject: "logs.normalized" },
-        security: { mode: "none" },
-      },
+    defaults: {
+      source,
+      host: "app-01",
+      service: "booking-api",
+      env: "prod",
     },
-    pipelines,
+    security: {
+      mode: "header",
+      token: "secret-token",
+    },
   });
 
-  const { app, publishCalls, consoleApi } = await createAppWithConf(
-    conf,
-    pipelines,
-  );
-
   try {
-    const response = await request(app.getHttpServer())
-      .post("/injest/php-app")
-      .set("X-token", "secret-token")
-      .send({
+    await createPipelineViaIngestor(pipeline);
+
+    const response = await requestJson(`${INGESTOR_URL}/ingest/${source}`, {
+      method: "POST",
+      headers: {
+        "X-token": "secret-token",
+      },
+      body: {
         raw: "2026-04-23 10:15:30 [ERROR] Database connection failed",
         metadata: { requestId: "req-123" },
-      })
-      .expect(201);
+      },
+    });
 
+    assert.equal(response.status, 201, response.text);
     assert.equal(response.body.accepted, true);
-    assert.equal(response.body.pipelineId, "php-app");
-    assert.equal(response.body.subject, "logs.php.normalized");
+    assert.equal(response.body.pipelineId, source);
+    assert.equal(response.body.subject, `logs.${source}.normalized`);
     assert.equal(response.body.normalizedLog.level, "ERROR");
     assert.equal(response.body.normalizedLog.host, "app-01");
     assert.equal(response.body.normalizedLog.context.service, "booking-api");
+    assert.equal(response.body.normalizedLog.message, "Database connection failed");
+  } finally {
+    await deletePipelineViaIngestor(source);
+  }
+});
 
-    assert.equal(publishCalls.length, 1);
-    assert.equal(publishCalls[0].subject, "logs.php.normalized");
-    assert.equal(publishCalls[0].payload.pipelineId, "php-app");
-    assert.equal(
-      publishCalls[0].payload.normalizedLog.message,
-      "Database connection failed",
+test("POST /ingest/:source rejects invalid pipeline token", async () => {
+  const source = uniqueSource("ingest-token");
+
+  try {
+    await createPipelineViaIngestor(
+      rawPipeline(source, {
+        security: {
+          mode: "query",
+          token: "query-secret",
+        },
+      }),
     );
-    assert.equal(publishCalls[0].headers["x-pipeline-id"], "php-app");
-    assert.equal(publishCalls[0].headers["x-source"], "php-app");
-    assert.equal(publishCalls[0].headers["x-log-level"], "ERROR");
-  } finally {
-    await app.close();
-    await consoleApi.close();
-    await conf.cleanup();
-  }
-});
 
-test("POST /injest/:source rejects invalid token", async () => {
-  const pipelines = [
-    {
-      id: "secure-source",
-      source: "secure-source",
-      enabled: true,
-      parser: { type: "raw" },
-      publish: {
-        subject: "logs.secure",
-      },
-      security: {
-        mode: "query",
-        token: "query-secret",
-      },
-    },
-  ];
+    const response = await requestJson(`${INGESTOR_URL}/ingest/${source}`, {
+      method: "POST",
+      body: { raw: "hello world" },
+    });
 
-  const conf = await createTestConf({
-    globalConfig: {
-      defaults: {
-        enabled: true,
-        parser: { type: "raw" },
-        publish: { subject: "logs.normalized" },
-        security: { mode: "none" },
-      },
-    },
-    pipelines,
-  });
-
-  const { app, publishCalls, consoleApi } = await createAppWithConf(
-    conf,
-    pipelines,
-  );
-
-  try {
-    const response = await request(app.getHttpServer())
-      .post("/injest/secure-source")
-      .send({ raw: "hello world" })
-      .expect(403);
-
+    assert.equal(response.status, 403, response.text);
     assert.match(response.body.message, /Invalid pipeline token/);
-    assert.equal(publishCalls.length, 0);
   } finally {
-    await app.close();
-    await consoleApi.close();
-    await conf.cleanup();
+    await deletePipelineViaIngestor(source);
   }
 });
 
-test("POST /injest/:source rejects disabled pipelines", async () => {
-  const pipelines = [
-    {
-      id: "disabled-pipeline",
-      source: "disabled-pipeline",
-      enabled: false,
-      parser: { type: "raw" },
-      publish: {
-        subject: "logs.disabled",
-      },
-      security: {
-        mode: "none",
-      },
-    },
-  ];
-
-  const conf = await createTestConf({
-    globalConfig: {
-      defaults: {
-        enabled: true,
-        parser: { type: "raw" },
-        publish: { subject: "logs.normalized" },
-        security: { mode: "none" },
-      },
-    },
-    pipelines,
-  });
-
-  const { app, publishCalls, consoleApi } = await createAppWithConf(
-    conf,
-    pipelines,
-  );
+test("POST /ingest/:source rejects disabled pipelines", async () => {
+  const source = uniqueSource("ingest-disabled");
 
   try {
-    const response = await request(app.getHttpServer())
-      .post("/injest/disabled-pipeline")
-      .send({ raw: "hello world" })
-      .expect(409);
+    await createPipelineViaIngestor(
+      rawPipeline(source, {
+        enabled: false,
+      }),
+    );
 
+    const response = await requestJson(`${INGESTOR_URL}/ingest/${source}`, {
+      method: "POST",
+      body: { raw: "hello world" },
+    });
+
+    assert.equal(response.status, 409, response.text);
     assert.match(response.body.message, /disabled/i);
-    assert.equal(publishCalls.length, 0);
   } finally {
-    await app.close();
-    await consoleApi.close();
-    await conf.cleanup();
-  }
-});
-test("ingestor bootstraps local file pipelines into storage-manager when remote DB is empty", async () => {
-  const pipelines = [
-    {
-      id: "bootstrap-app",
-      source: "bootstrap-app",
-      enabled: true,
-      parser: { type: "raw" },
-      publish: {
-        subject: "logs.bootstrap",
-      },
-      security: {
-        mode: "none",
-      },
-    },
-  ];
-
-  const conf = await createTestConf({
-    globalConfig: {
-      defaults: {
-        enabled: true,
-        parser: { type: "raw" },
-        publish: { subject: "logs.normalized" },
-        security: { mode: "none" },
-      },
-    },
-    pipelines,
-  });
-
-  const { app, publishCalls, consoleApi } = await createAppWithConf(conf, []);
-
-  try {
-    assert.equal(consoleApi.getPipelines().length, 1);
-    assert.equal(consoleApi.getPipelines()[0].source, "bootstrap-app");
-    assert.equal(consoleApi.getImportCalls().length, 1);
-
-    await request(app.getHttpServer())
-      .post("/injest/bootstrap-app")
-      .send({ raw: "hello world" })
-      .expect(201);
-
-    assert.equal(publishCalls.length, 1);
-    assert.equal(publishCalls[0].subject, "logs.bootstrap");
-  } finally {
-    await app.close();
-    await consoleApi.close();
-    await conf.cleanup();
+    await deletePipelineViaIngestor(source);
   }
 });

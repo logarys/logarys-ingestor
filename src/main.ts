@@ -3,7 +3,6 @@ import { Logger, ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
 import { ConfigService } from "@nestjs/config";
-import { PipelineService } from "./pipelines/services/pipeline.service.js";
 
 type EnvConfig = {
   appHost: string;
@@ -30,8 +29,6 @@ async function bootstrap(): Promise<void> {
 
   await app.listen(port, host);
 
-  const pipelineService: PipelineService = app.get(PipelineService);
-  setInterval(() => pipelineService.refresh(), 60000);
 
   Logger.log(`Log ingestor listening on http://${host}:${port}`, "Bootstrap");
 }

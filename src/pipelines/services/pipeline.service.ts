@@ -42,7 +42,7 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
 
     const remotePipelines = await this.fetchRemote();
 
-    if (remotePipelines.length > 0) {
+    if (remotePipelines !== null && remotePipelines.length > 0) {
       this.setPipelines(remotePipelines);
       await this.rewriteLocalFilesFromRemote(remotePipelines);
       return;
@@ -50,22 +50,24 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
 
     const localPipelines = this.pipelineConfigService.getAll();
 
-    if (localPipelines.length > 0) {
+    if (remotePipelines !== null && localPipelines.length > 0) {
       await this.importToStorageManager(localPipelines);
       const reloadedRemotePipelines = await this.fetchRemote();
       const effectivePipelines =
-        reloadedRemotePipelines.length > 0 ? reloadedRemotePipelines : localPipelines;
+        reloadedRemotePipelines !== null && reloadedRemotePipelines.length > 0
+          ? reloadedRemotePipelines
+          : localPipelines;
 
       this.setPipelines(effectivePipelines);
 
-      if (reloadedRemotePipelines.length > 0) {
+      if (reloadedRemotePipelines !== null && reloadedRemotePipelines.length > 0) {
         await this.rewriteLocalFilesFromRemote(reloadedRemotePipelines);
       }
 
       return;
     }
 
-    this.setPipelines([]);
+    this.setPipelines(localPipelines);
   }
 
   public getPipeline(source: string): PipelineConfig | undefined {
@@ -81,23 +83,12 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
   public async refresh(): Promise<void> {
     const remote = await this.fetchRemote();
 
-    if (remote.length > 0) {
-      this.setPipelines(remote);
-      await this.rewriteLocalFilesFromRemote(remote);
+    if (remote === null) {
       return;
     }
 
-    await this.pipelineConfigService.reload();
-    const localPipelines = this.pipelineConfigService.getAll();
-
-    if (localPipelines.length > 0) {
-      await this.importToStorageManager(localPipelines);
-      const reloaded = await this.fetchRemote();
-      this.setPipelines(reloaded.length > 0 ? reloaded : localPipelines);
-      return;
-    }
-
-    this.setPipelines([]);
+    this.setPipelines(remote);
+    await this.rewriteLocalFilesFromRemote(remote);
   }
 
   public async createPipeline(
@@ -190,11 +181,11 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async fetchRemote(): Promise<PipelineConfig[]> {
+  private async fetchRemote(): Promise<PipelineConfig[] | null> {
     const storageManagerUrl = this.getStorageManagerUrl();
 
     if (!storageManagerUrl) {
-      return [];
+      return null;
     }
 
     try {
@@ -209,7 +200,7 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(
         `Unable to fetch pipeline configuration from storage-manager: ${this.formatError(error)}`,
       );
-      return [];
+      return null;
     }
   }
 
@@ -323,7 +314,7 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
   private async refreshAfterMutation(): Promise<void> {
     const remote = await this.fetchRemote();
 
-    if (remote.length > 0) {
+    if (remote !== null) {
       this.setPipelines(remote);
       await this.rewriteLocalFilesFromRemote(remote);
       return;

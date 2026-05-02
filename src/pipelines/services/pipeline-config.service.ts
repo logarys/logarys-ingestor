@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { promises as fs } from "node:fs";
+import { constants, promises as fs } from "node:fs";
 import path from "node:path";
 import type {
   GlobalPipelinesConfig,
@@ -32,8 +32,15 @@ export class PipelineConfigService implements OnModuleInit {
       infer: true,
     })!;
 
-    await fs.mkdir(path.dirname(globalFile), { recursive: true });
-    await fs.mkdir(pipelinesDir, { recursive: true });
+    await this.assertWritableDirectory(
+      path.dirname(globalFile),
+      "Global config directory",
+    );
+    
+    await this.assertWritableDirectory(
+      pipelinesDir,
+      "Pipelines config directory",
+    );
 
     this.globalConfig = await this.readJsonFile<GlobalPipelinesConfig>(
       globalFile,
@@ -88,30 +95,6 @@ export class PipelineConfigService implements OnModuleInit {
       throw new NotFoundException(`Pipeline for source ${source} not found`);
     }
     return pipeline;
-  }
-
-
-  public async replacePipelines(pipelines: PipelineConfig[]): Promise<void> {
-    const pipelinesDir = this.configService.get<string>("confPipelinesDir", {
-      infer: true,
-    })!;
-
-    await fs.mkdir(pipelinesDir, { recursive: true });
-
-    const entries = await fs.readdir(pipelinesDir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith(".json")) {
-        await fs.rm(path.join(pipelinesDir, entry.name), { force: true });
-      }
-    }
-
-    for (const pipeline of pipelines) {
-      const filename = `${this.safeFilename(pipeline.id)}.json`;
-      await this.writeJsonFile(path.join(pipelinesDir, filename), pipeline);
-    }
-
-    await this.reload();
   }
 
   public async saveGlobalConfig(
@@ -199,11 +182,90 @@ export class PipelineConfigService implements OnModuleInit {
     filepath: string,
     payload: unknown,
   ): Promise<void> {
-    await fs.mkdir(path.dirname(filepath), { recursive: true });
     await fs.writeFile(
       filepath,
       `${JSON.stringify(payload, null, 2)}\n`,
       "utf8",
     );
   }
+
+  public async replacePipelines(pipelines: PipelineConfig[]): Promise<void> {
+    const pipelinesDir = this.configService.get<string>("confPipelinesDir", {
+      infer: true,
+    })!;
+
+    await this.assertWritableDirectory(
+      pipelinesDir,
+      "Pipelines config directory",
+    );
+
+    const entries = await fs.readdir(pipelinesDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".json")) {
+        await fs.rm(path.join(pipelinesDir, entry.name), { force: true });
+      }
+    }
+
+    for (const pipeline of pipelines) {
+      const filename = `${this.safeFilename(pipeline.source ?? pipeline.id)}.json`;
+      await this.writeJsonFile(
+        path.join(pipelinesDir, filename),
+        this.toFilePipeline(pipeline),
+      );
+    }
+
+    await this.reload();
+  }
+
+  private toFilePipeline(pipeline: PipelineConfig): PipelineConfig {
+    const { _id, createdAt, updatedAt, ...cleaned } = pipeline as PipelineConfig & {
+      _id?: unknown;
+      createdAt?: unknown;
+      updatedAt?: unknown;
+    };
+
+    return cleaned;
+  }
+  private async assertWritableDirectory(
+    directory: string,
+    label: string,
+  ): Promise<void> {
+    let stat;
+  
+    try {
+      stat = await fs.stat(directory);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        throw new Error(
+          `${label} does not exist: ${directory}. Create it and make it writable by the ingestor container.`,
+        );
+      }
+  
+      throw new Error(
+        `Unable to access ${label}: ${directory}. ${this.formatFileError(error)}`,
+      );
+    }
+  
+    if (!stat.isDirectory()) {
+      throw new Error(`${label} is not a directory: ${directory}`);
+    }
+  
+    try {
+      await fs.access(directory, constants.R_OK | constants.W_OK);
+    } catch (error: unknown) {
+      throw new Error(
+        `${label} is not readable/writable by the ingestor container: ${directory}. ${this.formatFileError(error)}`,
+      );
+    }
+  }
+  
+  private formatFileError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+  
+    return String(error);
+  }
+
 }

@@ -1,40 +1,97 @@
 #!/usr/bin/env bash
-set -u
+set -Eeuo pipefail
 
 LOG_FILE="${TMPDIR:-/tmp}/logarys-ingestor-test-output.log"
 DOCKER_LOG_FILE="${TMPDIR:-/tmp}/logarys-ingestor-docker-output.log"
 : > "$LOG_FILE"
 : > "$DOCKER_LOG_FILE"
-CLEANED=0
 
 cleanup() {
-  if [ "$CLEANED" -eq 0 ]; then
-    docker compose logs --no-color > "$DOCKER_LOG_FILE" 2>&1 || true
-    cat "$DOCKER_LOG_FILE" >> "$LOG_FILE"
-    docker compose down -v >/dev/null 2>&1 || true
-  fi
+  docker compose down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
+prepare_test_conf() {
+  rm -rf .test-runtime
+  mkdir -p .test-runtime/conf/pipelines.d
+
+  cat > .test-runtime/conf/pipelines.json <<'JSON'
+{
+  "defaults": {
+    "enabled": true,
+    "parser": { "type": "raw" },
+    "publish": { "subject": "logs.normalized" },
+    "security": { "mode": "none" }
+  }
+}
+JSON
+
+  cat > .test-runtime/conf/pipelines.d/php-app.json <<'JSON'
+{
+  "id": "php-app",
+  "source": "php-app",
+  "enabled": true,
+  "parser": {
+    "type": "regex",
+    "pattern": "^(?<timestamp>\\S+\\s+\\S+)\\s+\\[(?<level>[A-Z]+)\\]\\s+(?<message>.*)$"
+  },
+  "defaults": {
+    "source": "php-app",
+    "host": "app-01",
+    "service": "booking-api",
+    "env": "prod"
+  },
+  "publish": {
+    "subject": "logs.php.normalized"
+  },
+  "security": {
+    "mode": "header",
+    "token": "my-secret-token"
+  }
+}
+JSON
+}
+
+run_tests_on_host() {
+  npm install
+  docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+  docker compose up -d --build mongodb nats storage-manager app
+  npm run build
+
+  export INGESTOR_URL="http://127.0.0.1:3000"
+  export REAL_STORAGE_MANAGER_URL="http://127.0.0.1:3001"
+  export STORAGE_MANAGER_API_TOKEN="functional-test-token"
+  export INGESTOR_API_TOKEN="functional-test-token"
+  export TEST_CONF_DIR="$PWD/.test-runtime/conf"
+
+  node --test --test-concurrency=1 test/*.test.js
+}
+
+run_tests_in_container() {
+  docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+  docker compose up -d --build mongodb nats storage-manager app
+  docker compose run --rm test-runner
+}
+
 set +e
 {
-  npm install || exit $?
-  docker compose pull || exit $?
-  docker compose up -d --build || exit $?
-  npm run build || exit $?
-  node --test
+  prepare_test_conf
+  if [ "${RUN_TESTS_IN_CONTAINER:-0}" = "1" ]; then
+    run_tests_in_container
+  else
+    run_tests_on_host
+  fi
   TEST_STATUS=$?
-  docker compose logs --no-color > "$DOCKER_LOG_FILE" 2>&1
-  cat "$DOCKER_LOG_FILE" >> "$LOG_FILE"
-  docker compose down -v >/dev/null 2>&1
-  CLEANED=1
+  docker compose logs --no-color app storage-manager > "$DOCKER_LOG_FILE" 2>&1 || true
   exit "$TEST_STATUS"
 } 2>&1 | tee -a "$LOG_FILE"
 STATUS=${PIPESTATUS[0]}
 set -e
 
+cat "$DOCKER_LOG_FILE" >> "$LOG_FILE"
+
 WARNING_PATTERN='(^|[[:space:]])(WARN|WARNING|npm warn|warn\[|warning)([[:space:]]|\[|:|$)'
-ERROR_PATTERN='(CONNECTION_REFUSED|NatsError|ECONNREFUSED|Unable to import local pipeline configuration|(^|[[:space:]])(ERROR|ERR)([[:space:]]|\[|:|$))'
+ERROR_PATTERN='(CONNECTION_REFUSED|NatsError|ECONNREFUSED|EAI_AGAIN|Unable to import local pipeline configuration|Unable to rewrite local pipeline files|(^|[[:space:]])(ERROR|ERR)([[:space:]]|\[|:|$))'
 
 if grep -E "$WARNING_PATTERN" "$LOG_FILE" >/dev/null 2>&1; then
   echo "Test output contains warnings:" >&2
@@ -43,7 +100,7 @@ if grep -E "$WARNING_PATTERN" "$LOG_FILE" >/dev/null 2>&1; then
 fi
 
 if grep -E "$ERROR_PATTERN" "$LOG_FILE" >/dev/null 2>&1; then
-  echo "Test output or Docker service logs contain errors:" >&2
+  echo "Test output or app/storage-manager logs contain errors:" >&2
   grep -E "$ERROR_PATTERN" "$LOG_FILE" >&2
   exit 1
 fi

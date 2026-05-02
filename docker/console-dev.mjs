@@ -1,5 +1,5 @@
 import http from "node:http";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 const host = process.env.CONSOLE_DEV_HOST ?? "0.0.0.0";
@@ -26,7 +26,6 @@ function readPipelines() {
 }
 
 function writePipelines(pipelines) {
-  mkdirSync(dirname(dataFile), { recursive: true });
   writeFileSync(dataFile, JSON.stringify(pipelines, null, 2));
 }
 
