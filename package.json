@@ -1,6 +1,6 @@
 {
   "name": "logarys-ingestor",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "description": "NestJS HTTP log ingestion service publishing normalized logs to NATS JetStream.",
   "type": "module",
