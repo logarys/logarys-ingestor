@@ -5,9 +5,11 @@ import {
   OnModuleInit,
 } from "@nestjs/common";
 import { HttpService } from "@nestjs/axios";
+import { normalizePipelineConfig, validatePipelineConfig } from "@logarys/pipeline-validator";
 import process from "node:process";
 import { PipelineConfig } from "../domain/pipeline-config.type.js";
 import { PipelineConfigService } from "./pipeline-config.service.js";
+import { BadRequestException } from "@nestjs/common";
 
 @Injectable()
 export class PipelineService implements OnModuleInit, OnModuleDestroy {
@@ -21,10 +23,16 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   public async onModuleInit(): Promise<void> {
+    this.logger.log("Loading pipeline configuration...");
+  
     await this.initFromFileOrRemote();
+  
+    this.logger.log(
+      `Pipeline configuration loaded successfully: ${this.pipelines.size} pipeline(s) in cache`,
+    );
+  
     this.startRefreshTimer();
   }
-
   public onModuleDestroy(): void {
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
@@ -39,21 +47,33 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
    */
   public async initFromFileOrRemote(): Promise<void> {
     await this.pipelineConfigService.reload();
-
+  
     const remotePipelines = await this.fetchRemote();
-
-    if (remotePipelines !== null && remotePipelines.length > 0) {
+  
+    this.logger.log(
+      `Storage-manager returned ${remotePipelines?.length ?? "no"} pipeline(s)`,
+    );
+  
+    if (remotePipelines && remotePipelines.length > 0) {
       this.setPipelines(remotePipelines);
       await this.rewriteLocalFilesFromRemote(remotePipelines);
+  
+      this.logger.log(
+        "Using storage-manager pipeline configuration as source of truth",
+      );
+  
       return;
     }
-
+  
     const localPipelines = this.pipelineConfigService.getAll();
-
-    if (remotePipelines !== null && localPipelines.length > 0) {
+  
+    this.logger.log(`Local files contain ${localPipelines.length} pipeline(s)`);
+  
+    if (localPipelines.length > 0) {
       await this.importToStorageManager(localPipelines);
+  
       const reloadedRemotePipelines = await this.fetchRemote();
-      const effectivePipelines =
+      const effectivePipelines: PipelineConfig[] =
         reloadedRemotePipelines !== null && reloadedRemotePipelines.length > 0
           ? reloadedRemotePipelines
           : localPipelines;
@@ -64,10 +84,18 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
         await this.rewriteLocalFilesFromRemote(reloadedRemotePipelines);
       }
 
+      this.logger.log(
+        `Imported local pipeline configuration into storage-manager: ${effectivePipelines.length} pipeline(s)`,
+      );
+  
       return;
     }
-
-    this.setPipelines(localPipelines);
+  
+    this.setPipelines([]);
+  
+    this.logger.warn(
+      "No pipeline configuration found in storage-manager or local files",
+    );
   }
 
   public getPipeline(source: string): PipelineConfig | undefined {
@@ -223,6 +251,11 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
       const payload = this.toStorageManagerPipeline(pipeline);
 
       try {
+        this.assertValidStorageManagerPipeline(
+          payload,
+          `local file import for pipeline ${pipeline.id}`,
+        );
+
         await this.http.axiosRef.post(
           `${storageManagerUrl}/pipelines`,
           payload,
@@ -253,9 +286,15 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
       return saved;
     }
 
+    const payload = this.toStorageManagerPipeline(pipeline);
+    this.assertValidStorageManagerPipeline(
+      payload,
+      `create pipeline ${pipeline.id}`,
+    );
+
     const res = await this.http.axiosRef.post(
       `${url}/pipelines`,
-      this.toStorageManagerPipeline(pipeline),
+      payload,
       {
         headers: this.authHeaders(),
       },
@@ -276,9 +315,15 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
       return saved;
     }
 
+    const payload = this.toStorageManagerPipeline(pipeline);
+    this.assertValidStorageManagerPipeline(
+      payload,
+      `update pipeline ${id}`,
+    );
+
     const res = await this.http.axiosRef.put(
       `${url}/pipelines/${encodeURIComponent(id)}`,
-      this.toStorageManagerPipeline(pipeline),
+      payload,
       {
         headers: this.authHeaders(),
       },
@@ -337,10 +382,97 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private validatePipelineDocumentForStorage(
+    pipeline: PipelineConfig,
+    context: string,
+  ): PipelineConfig {
+    const documentErrors: string[] = [];
+  
+    if (!pipeline.id || typeof pipeline.id !== "string") {
+      documentErrors.push("$.id: id is required and must be a string");
+    }
+  
+    if (!pipeline.source || typeof pipeline.source !== "string") {
+      documentErrors.push("$.source: source is required and must be a string");
+    }
+  
+    if (typeof pipeline.enabled !== "boolean") {
+      documentErrors.push("$.enabled: enabled is required and must be a boolean");
+    }
+  
+    const runtimeConfig = {
+      parser: pipeline.parser,
+      defaults: {
+        ...(pipeline.defaults ?? {}),
+        source: pipeline.defaults?.source ?? pipeline.source,
+      },
+      publish: pipeline.publish ?? {
+        subject: `logs.${pipeline.source}.normalized`,
+      },
+      security: pipeline.security ?? {
+        mode: "none",
+      },
+    };
+  
+    const validation = validatePipelineConfig(this.compactDeep(runtimeConfig));
+      
+    const validationErrors = validation.valid
+      ? []
+      : validation.errors.map((error) => `${error.path}: ${error.message}`);
+  
+    const errors = [...documentErrors, ...validationErrors];
+  
+    if (errors.length > 0) {
+      const message = `Invalid pipeline configuration before storage-manager import (${context}). errors: ${errors.join(
+        " | ",
+      )}`;
+  
+      this.logger.error(message);
+  
+      throw new BadRequestException(message);
+    }
+  
+    return pipeline;
+  }
+
+  private assertValidStorageManagerPipeline(
+    pipeline: PipelineConfig,
+    context: string,
+  ): void {
+    const result = validatePipelineConfig(pipeline, {
+      document: true,
+      requireDocumentFields: true,
+    });
+
+    if (result.valid) {
+      return;
+    }
+
+    const errors = result.errors
+      .map((issue) => `${issue.path}: ${issue.message}`)
+      .join(" | ");
+
+    const warnings = result.warnings
+      .map((issue) => `${issue.path}: ${issue.message}`)
+      .join(" | ");
+
+    const message = [
+      `Invalid pipeline configuration before storage-manager import (${context})`,
+      errors ? `errors: ${errors}` : null,
+      warnings ? `warnings: ${warnings}` : null,
+    ]
+      .filter(Boolean)
+      .join(". ");
+
+    this.logger.error(message);
+    throw new Error(message);
+  }
+
   private toStorageManagerPipeline(pipeline: PipelineConfig): PipelineConfig {
     const parser = pipeline.parser as PipelineConfig["parser"] & {
       regex?: string;
     };
+
     const parserPattern = parser.pattern ?? parser.regex;
 
     const nextParser: PipelineConfig["parser"] = {
@@ -352,7 +484,7 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
     }
 
     const defaults = this.compactObject({
-      source: pipeline.defaults?.source,
+      source: pipeline.defaults?.source ?? pipeline.source,
       host: pipeline.defaults?.host,
       service: pipeline.defaults?.service,
       env:
@@ -364,28 +496,49 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
         )?.environment,
     });
 
-    const publish = {
-      subject:
-        pipeline.publish?.subject ?? `logs.${pipeline.source}.normalized`,
-    };
-
-    return this.compactObject({
+    const payload = this.compactObject({
       id: pipeline.id,
       source: pipeline.source,
       enabled: pipeline.enabled,
       parser: nextParser,
-      defaults: Object.keys(defaults).length > 0 ? defaults : undefined,
-      publish,
-      security: pipeline.security ?? { mode: "none" },
+      defaults,
+      publish: {
+        subject:
+          pipeline.publish?.subject ?? `logs.${pipeline.source}.normalized`,
+      },
+      security: this.compactDeep({
+        mode: pipeline.security?.mode ?? "none",
+        token: pipeline.security?.token,
+      }),
     }) as PipelineConfig;
-  }
 
+    return this.validatePipelineDocumentForStorage(
+      payload,
+      `pipeline ${pipeline.id ?? pipeline.source}`,
+    );
+  }
   private compactObject<T extends Record<string, unknown>>(
     payload: T,
   ): Partial<T> {
     return Object.fromEntries(
       Object.entries(payload).filter(([, value]) => value !== undefined),
     ) as Partial<T>;
+  }
+
+  private compactDeep<T>(value: T): T {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.compactDeep(item)) as T;
+    }
+  
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([, item]) => item !== undefined)
+          .map(([key, item]) => [key, this.compactDeep(item)]),
+      ) as T;
+    }
+  
+    return value;
   }
 
   private getStorageManagerUrl(): string | null {

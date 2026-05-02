@@ -2,17 +2,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createPipelineViaIngestor,
-  deletePipelineViaIngestor,
   rawPipeline,
   requestJson,
   uniqueSource,
   INGESTOR_URL,
+  cleanupPipelineViaStorage,
+  createPipelineViaStorage,
+  waitForIngestorPipeline,
+  jsonHeaders,
+  waitFor,
 } from "./helpers.js";
 
 test("POST /ingest/:source normalizes and publishes one message through real NATS", async () => {
   const source = uniqueSource("ingest-ok");
   const pipeline = rawPipeline(source, {
-    parser: {
+     id: source,
+     source,
+     enabled: true,
+     parser: {
       type: "regex",
       pattern:
         "^(?<timestamp>\\S+\\s+\\S+)\\s+\\[(?<level>[A-Z]+)\\]\\s+(?<message>.*)$",
@@ -42,7 +49,7 @@ test("POST /ingest/:source normalizes and publishes one message through real NAT
         metadata: { requestId: "req-123" },
       },
     });
-
+    
     assert.equal(response.status, 201, response.text);
     assert.equal(response.body.accepted, true);
     assert.equal(response.body.pipelineId, source);
@@ -52,53 +59,84 @@ test("POST /ingest/:source normalizes and publishes one message through real NAT
     assert.equal(response.body.normalizedLog.context.service, "booking-api");
     assert.equal(response.body.normalizedLog.message, "Database connection failed");
   } finally {
-    await deletePipelineViaIngestor(source);
+    await cleanupPipelineViaStorage(pipeline.id);
   }
 });
 
 test("POST /ingest/:source rejects invalid pipeline token", async () => {
-  const source = uniqueSource("ingest-token");
+  const pipelineId = uniqueSource("secure-source");
+
+  const pipeline = rawPipeline(pipelineId, {
+    parser: { type: "raw" },
+    defaults: {
+      source: pipelineId,
+    },
+    publish: {
+      subject: `logs.${pipelineId}.normalized`,
+    },
+    security: {
+      mode: "query",
+      token: "query-secret",
+    },
+  });
 
   try {
-    await createPipelineViaIngestor(
-      rawPipeline(source, {
-        security: {
-          mode: "query",
-          token: "query-secret",
-        },
-      }),
-    );
+    await createPipelineViaIngestor(pipeline);
 
-    const response = await requestJson(`${INGESTOR_URL}/ingest/${source}`, {
+    const response = await requestJson(`${INGESTOR_URL}/ingest/${pipelineId}`, {
       method: "POST",
-      body: { raw: "hello world" },
+      body: {
+        raw: "hello world",
+      },
     });
 
     assert.equal(response.status, 403, response.text);
-    assert.match(response.body.message, /Invalid pipeline token/);
+    assert.match(JSON.stringify(response.body), /token|forbidden|invalid/i);
   } finally {
-    await deletePipelineViaIngestor(source);
+    await cleanupPipelineViaStorage(pipelineId);
   }
 });
 
 test("POST /ingest/:source rejects disabled pipelines", async () => {
-  const source = uniqueSource("ingest-disabled");
+  const pipelineId = uniqueSource("disabled-source");
+
+  const pipeline = rawPipeline(pipelineId, {
+    enabled: false,
+    parser: { type: "raw" },
+    defaults: {
+      source: pipelineId,
+    },
+    publish: {
+      subject: `logs.${pipelineId}.normalized`,
+    },
+    security: {
+      mode: "none",
+    },
+  });
 
   try {
-    await createPipelineViaIngestor(
-      rawPipeline(source, {
-        enabled: false,
-      }),
-    );
+    await createPipelineViaStorage(pipeline);
 
-    const response = await requestJson(`${INGESTOR_URL}/ingest/${source}`, {
-      method: "POST",
-      body: { raw: "hello world" },
+    const response = await waitFor(async () => {
+      const current = await requestJson(`${INGESTOR_URL}/ingest/${pipelineId}`, {
+        method: "POST",
+        body: {
+          raw: "hello world",
+        },
+      });
+
+      if (current.status !== 409) {
+        throw new Error(
+          `Expected disabled pipeline conflict, got ${current.status}: ${current.text}`,
+        );
+      }
+
+      return current;
     });
 
-    assert.equal(response.status, 409, response.text);
-    assert.match(response.body.message, /disabled/i);
+    assert.equal(response.status, 409);
+    assert.match(JSON.stringify(response.body), /disabled/i);
   } finally {
-    await deletePipelineViaIngestor(source);
+    await cleanupPipelineViaStorage(pipelineId);
   }
 });

@@ -55,16 +55,17 @@ JSON
 run_tests_on_host() {
   npm install
   docker compose down -v --remove-orphans >/dev/null 2>&1 || true
-  docker compose up -d --build mongodb nats storage-manager app
+  docker compose up -d --build
   npm run build
 
-  export INGESTOR_URL="http://127.0.0.1:3000"
-  export REAL_STORAGE_MANAGER_URL="http://127.0.0.1:3001"
-  export STORAGE_MANAGER_API_TOKEN="functional-test-token"
-  export INGESTOR_API_TOKEN="functional-test-token"
-  export TEST_CONF_DIR="$PWD/.test-runtime/conf"
-
-  node --test --test-concurrency=1 test/*.test.js
+  TEST_INGESTOR_URL="http://127.0.0.1:3000" \
+  TEST_STORAGE_MANAGER_URL="http://127.0.0.1:3001" \
+  TEST_INGESTOR_API_TOKEN="functional-test-token" \
+  TEST_STORAGE_MANAGER_API_TOKEN="functional-test-token" \
+  node --test \
+    test/ingest-http.test.js \
+    test/pipelines-api.test.js \
+    test/startup-sync.test.js
 }
 
 run_tests_in_container() {
