@@ -11,8 +11,8 @@ import { Type } from "class-transformer";
 
 class ParserDto {
   @IsString()
-  @IsIn(["raw", "json", "regex"])
-  type!: "raw" | "json" | "regex";
+  @IsIn(["raw", "json", "regex", "loki"])
+  type!: "raw" | "json" | "regex" | "loki";
 
   @IsOptional()
   @IsString()

@@ -63,6 +63,8 @@ run_tests_on_host() {
   TEST_INGESTOR_API_TOKEN="functional-test-token" \
   TEST_STORAGE_MANAGER_API_TOKEN="functional-test-token" \
   node --test \
+    test/loki-pipeline.test.js \
+    test/pipeline-validator-integration.test.js \
     test/ingest-http.test.js \
     test/pipelines-api.test.js \
     test/startup-sync.test.js

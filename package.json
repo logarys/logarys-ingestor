@@ -28,7 +28,7 @@
     "reflect-metadata": "0.2.*",
     "rxjs": "7.8.*",
     "small-log-normalizer": "0.1.*",
-    "@logarys/pipeline-validator": "^0.1.0"
+    "@logarys/pipeline-validator": "0.2.*"
   },
   "devDependencies": {
     "@nestjs/testing": "11.1.*",

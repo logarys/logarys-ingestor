@@ -1,5 +1,5 @@
 export type PipelineSecurityMode = "none" | "header" | "query";
-export type ParserType = "raw" | "json" | "regex";
+export type ParserType = "raw" | "json" | "regex" | "loki";
 
 export interface PipelineConfig {
   id: string;

@@ -37,6 +37,8 @@ export class EngineFactoryService {
         return new JsonParser();
       case "regex":
         return new RegexMappedParser(pipeline);
+      case "loki":
+        return new LokiParser(pipeline);
       case "raw":
       default:
         return new RawParser();
@@ -115,3 +117,103 @@ class RegexMappedParser implements LogParser {
     return groups[groupName];
   }
 }
+
+class LokiParser implements LogParser {
+  public constructor(private readonly pipeline: PipelineConfig) {}
+
+  public canParse(input: RawLogInput): boolean {
+    return typeof input.raw === "string" && input.raw.length > 0;
+  }
+
+  public parse(input: RawLogInput): ParsedLog {
+    const fields = this.parseKeyValueLine(input.raw);
+    const metadata = input.metadata ?? {};
+
+    const lokiTimestamp =
+      this.asString(metadata.lokiTimestampNs) ?? this.asString(metadata.lokiTimestamp);
+
+    const timestamp =
+      fields.timestamp ?? fields.time ?? fields.ts ?? this.timestampFromLokiNs(lokiTimestamp);
+
+    const level = fields.level ?? fields.severity ?? fields.m_level ?? "info";
+    const message =
+      fields.message ?? fields.msg ?? fields.m_msg ?? fields.log ?? input.raw;
+
+    const extra = { ...metadata } as Record<string, unknown>;
+
+    for (const [key, value] of Object.entries(fields)) {
+      if (
+        ![
+          "timestamp",
+          "time",
+          "ts",
+          "level",
+          "severity",
+          "m_level",
+          "message",
+          "msg",
+          "m_msg",
+          "source",
+          "host",
+          "service",
+          "env",
+          "environment",
+        ].includes(key)
+      ) {
+        extra[key] = value;
+      }
+    }
+
+    return {
+      timestamp,
+      level,
+      message,
+      source: fields.source ?? input.source,
+      host: fields.host ?? input.host,
+      service: fields.service ?? input.service,
+      env: fields.env ?? fields.environment ?? input.env,
+      extra,
+    };
+  }
+
+  private parseKeyValueLine(raw: string): Record<string, string> {
+    const fields: Record<string, string> = {};
+    const matcher = /([A-Za-z_][A-Za-z0-9_.-]*)=("(?:\\.|[^"])*"|\S*)/gu;
+
+    for (const match of raw.matchAll(matcher)) {
+      fields[match[1]] = this.decodeValue(match[2]);
+    }
+
+    if (Object.keys(fields).length === 0) {
+      fields.message = raw;
+    }
+
+    return fields;
+  }
+
+  private decodeValue(value: string): string {
+    if (value.startsWith('"') && value.endsWith('"')) {
+      try {
+        return JSON.parse(value) as string;
+      } catch {
+        return value.slice(1, -1);
+      }
+    }
+
+    return value;
+  }
+
+  private timestampFromLokiNs(value: string | undefined): string | undefined {
+    if (!value || !/^\d+$/.test(value)) {
+      return undefined;
+    }
+
+    const millis = Number(BigInt(value) / 1_000_000n);
+    return new Date(millis).toISOString();
+  }
+
+  private asString(value: unknown): string | undefined {
+    return typeof value === "string" ? value : undefined;
+  }
+}
+

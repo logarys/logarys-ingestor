@@ -1,8 +1,18 @@
-import { IsObject, IsOptional, IsString } from "class-validator";
+import { IsArray, IsObject, IsOptional, IsString } from "class-validator";
+
+export interface LokiPushStream {
+  stream?: Record<string, string>;
+  values?: Array<[string, string]>;
+}
 
 export class IngestLogDto {
+  @IsOptional()
   @IsString()
-  raw!: string;
+  raw?: string;
+
+  @IsOptional()
+  @IsArray()
+  streams?: LokiPushStream[];
 
   @IsOptional()
   @IsString()

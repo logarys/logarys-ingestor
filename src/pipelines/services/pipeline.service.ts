@@ -1,15 +1,15 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
 import { HttpService } from "@nestjs/axios";
-import { normalizePipelineConfig, validatePipelineConfig } from "@logarys/pipeline-validator";
+import { validatePipelineConfig } from "@logarys/pipeline-validator";
 import process from "node:process";
 import { PipelineConfig } from "../domain/pipeline-config.type.js";
 import { PipelineConfigService } from "./pipeline-config.service.js";
-import { BadRequestException } from "@nestjs/common";
 
 @Injectable()
 export class PipelineService implements OnModuleInit, OnModuleDestroy {
@@ -402,6 +402,7 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
   
     const runtimeConfig = {
       parser: pipeline.parser,
+      mapping: pipeline.mapping,
       defaults: {
         ...(pipeline.defaults ?? {}),
         source: pipeline.defaults?.source ?? pipeline.source,
@@ -414,7 +415,9 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
       },
     };
   
-    const validation = validatePipelineConfig(this.compactDeep(runtimeConfig));
+    const validation = validatePipelineConfig(
+      this.compactDeep(runtimeConfig),
+    );
       
     const validationErrors = validation.valid
       ? []
@@ -439,10 +442,13 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
     pipeline: PipelineConfig,
     context: string,
   ): void {
-    const result = validatePipelineConfig(pipeline, {
-      document: true,
-      requireDocumentFields: true,
-    });
+    const result = validatePipelineConfig(
+      pipeline,
+      {
+        document: true,
+        requireDocumentFields: true,
+      },
+    );
 
     if (result.valid) {
       return;
@@ -501,6 +507,9 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
       source: pipeline.source,
       enabled: pipeline.enabled,
       parser: nextParser,
+      mapping: pipeline.mapping
+        ? this.compactDeep(pipeline.mapping)
+        : undefined,
       defaults,
       publish: {
         subject:
@@ -517,6 +526,7 @@ export class PipelineService implements OnModuleInit, OnModuleDestroy {
       `pipeline ${pipeline.id ?? pipeline.source}`,
     );
   }
+
   private compactObject<T extends Record<string, unknown>>(
     payload: T,
   ): Partial<T> {
